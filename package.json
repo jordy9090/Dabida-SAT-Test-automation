@@ -1,0 +1,21 @@
+{
+  "name": "gemini-sat-pdf-exporter",
+  "version": "1.0.0",
+  "description": "Chrome Extension to extract SAT problems from Google Gemini and export to PDF",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "esbuild content.js --bundle --format=iife --platform=browser --target=chrome120 --outfile=dist/content.js --sourcemap --banner:js=\"// Gemini SAT PDF Exporter - Bundled Content Script\""
+  },
+  "keywords": [
+    "chrome-extension",
+    "sat",
+    "pdf",
+    "gemini",
+    "scraping"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.27.2"
+  }
+}
