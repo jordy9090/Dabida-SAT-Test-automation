@@ -60,6 +60,12 @@ function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, m
 
   // 각 문제 추가
   problems.forEach((problem, index) => {
+    // #region agent log - DEBUG STEP 4: PDFGenerator에서 problem.figures 검증
+    const debugLabel = problem.problemNumber || problem.number || index + 1;
+    console.log(`[DEBUG STEP 4] PDFGenerator 문제 루프 시작: 문제 ${debugLabel}, problem.figures=${problem.figures ? problem.figures.length : 'undefined'}`);
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pdfGenerator.js:addProblemsSectionToPDF:loopStart',message:'DEBUG STEP 4: PDFGenerator 문제 루프 시작',data:{problemLabel:debugLabel,index,hasFigures:!!problem.figures,figuresLength:problem.figures?problem.figures.length:0,figures:problem.figures?problem.figures.map(f=>({w:f.width,h:f.height,hasDataUrl:!!f.dataUrl})):null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    
     // 페이지 체크
     if (yPosition + lineHeight * 10 > pageHeight - 20) {
       doc.addPage();
@@ -134,6 +140,86 @@ function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, m
       yPosition += lineHeight;
       doc.setTextColor(0, 0, 0);
       yPosition += lineHeight * 0.5;
+    }
+    // ============================================================================
+
+    // ============================================================================
+    // Figure 이미지 삽입
+    // ============================================================================
+    // #region agent log - DEBUG STEP 4: figures 블록 진입 확인
+    console.log(`[DEBUG STEP 4] figures 블록 체크: 문제 ${problemLabel}, figures 존재=${!!problem.figures}, 배열=${Array.isArray(problem.figures)}, 길이=${problem.figures ? problem.figures.length : 0}`);
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pdfGenerator.js:addProblemsSectionToPDF:figuresCheck',message:'DEBUG STEP 4: figures 블록 체크',data:{problemLabel,hasFigures:!!problem.figures,isArray:Array.isArray(problem.figures),figuresLength:problem.figures?problem.figures.length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    
+    if (problem.figures && Array.isArray(problem.figures) && problem.figures.length > 0) {
+      // #region agent log - DEBUG STEP 4: figures 블록 진입
+      console.log(`[DEBUG STEP 4] figures 블록 진입: 문제 ${problemLabel}, ${problem.figures.length}개 figure`);
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pdfGenerator.js:addProblemsSectionToPDF:figuresBlockEnter',message:'DEBUG STEP 4: figures 블록 진입',data:{problemLabel,figuresLength:problem.figures.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      
+      console.log(`[PDF] 문제 ${problem.problemNumber || problem.number || index + 1}에 ${problem.figures.length}개 figure 삽입 시작`);
+      
+      for (let figIdx = 0; figIdx < problem.figures.length; figIdx++) {
+        const figure = problem.figures[figIdx];
+        try {
+          // #region agent log - DEBUG STEP 5: addImage 호출 직전
+          console.log(`[DEBUG STEP 5] addImage 호출 직전: 문제 ${problemLabel}, figure ${figIdx + 1}/${problem.figures.length}`);
+          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pdfGenerator.js:addProblemsSectionToPDF:beforeAddImage',message:'DEBUG STEP 5: addImage 호출 직전',data:{problemLabel,figIdx:figIdx+1,totalFigures:problem.figures.length,figureWidth:figure.width,figureHeight:figure.height,hasDataUrl:!!figure.dataUrl,dataUrlLength:figure.dataUrl?figure.dataUrl.length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          // 이미지 가로폭 계산 (페이지 여백 고려)
+          const maxImageWidth = maxWidth; // 이미지 최대 가로폭
+          const imgWidth = figure.width || 100;
+          const imgHeight = figure.height || 100;
+          
+          // 비율 유지하며 리사이즈
+          let displayWidth = Math.min(maxImageWidth, imgWidth);
+          const aspectRatio = imgHeight / imgWidth;
+          let displayHeight = displayWidth * aspectRatio;
+          
+          // 이미지가 너무 크면 리사이즈
+          if (displayHeight > pageHeight - yPosition - 30) {
+            displayHeight = pageHeight - yPosition - 30;
+            displayWidth = displayHeight / aspectRatio;
+          }
+          
+          // 페이지 하단 체크
+          if (yPosition + displayHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = margin;
+            // 새 페이지에서도 크기 재계산
+            if (displayHeight > pageHeight - yPosition - 30) {
+              displayHeight = pageHeight - yPosition - 30;
+              displayWidth = displayHeight / aspectRatio;
+            }
+          }
+          
+          console.log(`[PDF] figure ${figIdx + 1} 삽입: x=${margin}, y=${yPosition.toFixed(1)}, w=${displayWidth.toFixed(1)}, h=${displayHeight.toFixed(1)}`);
+          
+          // #region agent log - DEBUG STEP 5: addImage 호출
+          console.log(`[DEBUG STEP 5] addImage 호출: x=${margin}, y=${yPosition.toFixed(1)}, w=${displayWidth.toFixed(1)}, h=${displayHeight.toFixed(1)}`);
+          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pdfGenerator.js:addProblemsSectionToPDF:addImageCall',message:'DEBUG STEP 5: addImage 호출',data:{problemLabel,figIdx:figIdx+1,x:margin,y:yPosition,w:displayWidth,h:displayHeight,dataUrlLength:figure.dataUrl?figure.dataUrl.length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          
+          // 이미지 삽입
+          doc.addImage(figure.dataUrl, 'PNG', margin, yPosition, displayWidth, displayHeight);
+          
+          // #region agent log - DEBUG STEP 5: addImage 호출 완료
+          console.log(`[DEBUG STEP 5] addImage 호출 완료: 문제 ${problemLabel}, figure ${figIdx + 1}`);
+          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pdfGenerator.js:addProblemsSectionToPDF:addImageComplete',message:'DEBUG STEP 5: addImage 호출 완료',data:{problemLabel,figIdx:figIdx+1},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          
+          yPosition += displayHeight + lineHeight * 0.5; // 이미지 아래 여백
+        } catch (error) {
+          console.warn(`[PDF] figure ${figIdx + 1} 삽입 실패 (계속 진행):`, error);
+          // #region agent log - DEBUG STEP 5: addImage 오류
+          console.error(`[DEBUG STEP 5] addImage 오류: 문제 ${problemLabel}, figure ${figIdx + 1}`, error);
+          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pdfGenerator.js:addProblemsSectionToPDF:addImageError',message:'DEBUG STEP 5: addImage 오류',data:{problemLabel,figIdx:figIdx+1,errorMessage:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          // 실패해도 계속 진행
+        }
+      }
+      
+      console.log(`[PDF] 문제 ${problem.problemNumber || problem.number || index + 1} figure 삽입 완료`);
     }
     // ============================================================================
 
@@ -220,6 +306,39 @@ function addAnswersSectionToPDF(doc, sectionName, problems, startY, maxWidth, ma
 
   // 각 문제의 정답 추가
   problems.forEach((problem) => {
+    // #region agent log - ANSWER DEBUG: 정답 섹션 문제 상태 기록
+    try {
+      const problemIndex = problems.indexOf(problem);
+      const problemLabelForLog =
+        (problem && typeof problem.problemNumber === 'number' && problem.problemNumber > 0)
+          ? problem.problemNumber
+          : (problem && typeof problem.number === 'number' && problem.number > 0)
+            ? problem.number
+            : problemIndex + 1;
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location: 'pdfGenerator.js:addAnswersSectionToPDF:problemEntry',
+          message: 'Answers PDF problem entry',
+          data: {
+            sectionName,
+            problemIndex,
+            problemLabel: problemLabelForLog,
+            hasCorrectAnswer: !!(problem && problem.correctAnswer),
+            correctAnswer: problem && problem.correctAnswer ? String(problem.correctAnswer) : null,
+            hasAnswerField: !!(problem && problem.answer),
+            answerField: problem && problem.answer ? String(problem.answer) : null
+          },
+          timestamp: Date.now(),
+          runId: 'answers-bug',
+          hypothesisId: 'H1'
+        })
+      }).catch(() => {});
+    } catch {
+      // 로깅 실패는 PDF 생성에 영향을 주지 않도록 무시
+    }
+    // #endregion
     // 페이지 체크
     if (yPosition + lineHeight * 5 > pageHeight - 20) {
       doc.addPage();

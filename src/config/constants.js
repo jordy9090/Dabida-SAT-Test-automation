@@ -15,16 +15,16 @@ export const CONFIG = {
     // Progress 표시
     progress: '[class*="progress"], [aria-label*="progress"]',
   },
-  // 타임아웃 설정 (밀리초)
+  // 타임아웃 설정 (밀리초) - 속도 최적화 (문제 스크랩 집중)
   timeouts: {
-    elementWait: 500,        // 요소 대기 간격
-    maxElementWait: 5000,     // 최대 요소 대기 시간
-    screenTransition: 2000,  // 화면 전환 대기
-    contentLoad: 2000,        // 콘텐츠 로드 대기
-    gradingWait: 3000,        // 채점 완료 대기
-    clickDelay: 500,          // 클릭 후 대기
-    scrollDelay: 800,         // 스크롤 후 대기
-    pdfDownloadDelay: 800,    // PDF 다운로드 간격
+    elementWait: 80,         // 요소 대기 간격
+    maxElementWait: 2500,    // 최대 요소 대기 시간
+    screenTransition: 150,  // 화면 전환 대기 (UI 반응 빠름)
+    contentLoad: 150,        // 콘텐츠 로드 대기
+    gradingWait: 1000,      // 채점 완료 대기
+    clickDelay: 120,        // 클릭 후 대기
+    scrollDelay: 150,       // 스크롤 후 대기
+    pdfDownloadDelay: 300,  // PDF 다운로드 간격
   },
   // 재시도 설정
   retries: {
@@ -45,7 +45,59 @@ export const CONFIG = {
   // 문제 수집 설정
   collection: {
     maxIterations: 60,        // 최대 반복 횟수
-    maxProblems: 27,          // 모듈당 최대 문제 수
+    maxProblems: 27,          // Reading 모듈당 최대 문제 수
+    mathMaxProblems: 22,      // Math 모듈당 최대 문제 수 (주관식 포함)
+  },
+  // Gemini 채팅 자동화 설정
+  geminiChat: {
+    inputSelectors: [
+      '[data-testid*="input"]',
+      '[data-testid*="textbox"]',
+      '[role="textbox"]',
+      '[role="combobox"]',
+      '[contenteditable="true"]',
+      'textarea[aria-label*="message"]',
+      'textarea[aria-label*="prompt"]',
+      'textarea[aria-label*="chat"]',
+      'textarea[aria-label*="입력"]',
+      'textarea[aria-label*="물어보기"]',
+      'textarea[aria-label*="ask"]',
+      'textarea[placeholder*="message"]',
+      'textarea[placeholder*="prompt"]',
+      'textarea[placeholder*="chat"]',
+      'textarea[placeholder*="입력"]',
+      'textarea[placeholder*="물어보기"]'
+    ],
+    submitSelectors: [
+      'button[data-testid*="send"]',
+      'button[data-testid*="submit"]',
+      'button[aria-label*="send"]',
+      'button[aria-label*="Send"]',
+      'button[aria-label*="전송"]',
+      'button[type="submit"]',
+      'button[aria-label*="submit"]'
+    ],
+    message: 'I want to take a full practice SAT TEST.',
+    satUIWaitTimeout: 60000,  // SAT UI 대기 타임아웃 (1분)
+  },
+  // Gemini SAT UI 진입 후 설정 단계 (geminiSetup.js)
+  geminiSetup: {
+    startButtonSelectors: [
+      'section-overview glowing-card:first-child .section-button-container button',
+      'glowing-card .section-button-container.ng-star-inserted button',
+      'activity-set section-overview .glowing-card .section-button-container button',
+    ],
+    firstToggleSelectors: [
+      'button[id^="mat-mdc-slide-toggle-"]',
+      '.mdc-switch',
+      'span.mdc-switch__handle-track',
+      'span.mdc-switch__shadow',
+    ],
+    secondToggleSelectors: [
+      'button[id^="mat-mdc-slide-toggle-"]',
+      'span.mdc-switch__track',
+    ],
+    setupSequenceTimeout: 15000,  // 설정 시퀀스 최대 대기 (15초)
   },
 };
 

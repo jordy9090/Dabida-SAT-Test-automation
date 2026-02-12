@@ -8,4 +8,3 @@ import { findButtonByText } from '../dom/buttons.js';
 
 // Re-export navigation functions from navigator.js for backward compatibility
 export { startNextModule, configureAndStartTest, clickSectionContinue } from '../flow/navigator.js';
-

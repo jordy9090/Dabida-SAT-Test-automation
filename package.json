@@ -4,18 +4,27 @@
   "description": "Chrome Extension to extract SAT problems from Google Gemini and export to PDF",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "esbuild content.js --bundle --format=iife --platform=browser --target=chrome120 --outfile=dist/content.js --sourcemap --banner:js=\"// Gemini SAT PDF Exporter - Bundled Content Script\""
+    "build": "esbuild content.js --bundle --format=iife --platform=browser --target=chrome120 --outfile=dist/content.js --sourcemap --banner:js=\"// Gemini SAT PDF Exporter - Bundled Content Script\"",
+    "playwright:login": "npx ts-node playwright/scripts/login.ts",
+    "playwright:smoke": "npx ts-node playwright/scripts/smoke.ts",
+    "playwright:frame-probe": "npx ts-node playwright/scripts/frame_probe.ts",
+    "playwright:overview": "npx ts-node playwright/scripts/overview.ts",
+    "playwright:start": "npx ts-node playwright/scripts/start.ts",
+    "playwright:collect": "npx ts-node playwright/runner.ts",
+    "playwright:build-extractor": "esbuild src/browser/extractor.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/extractor.bundle.js"
   },
-  "keywords": [
-    "chrome-extension",
-    "sat",
-    "pdf",
-    "gemini",
-    "scraping"
-  ],
+  "keywords": ["chrome-extension", "sat", "pdf", "gemini", "scraping"],
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "esbuild": "^0.27.2"
+    "@types/node": "^20.10.0",
+    "esbuild": "^0.27.2",
+    "playwright": "^1.40.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2"
   }
 }

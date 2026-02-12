@@ -58,7 +58,7 @@ export function waitForContentLoad(delay = 1000) {
     observer = new MutationObserver(() => {
       cleanup();
       // 추가 대기 (애니메이션 등)
-      setTimeout(resolve, 300);
+      setTimeout(resolve, 25);
     });
     
     if (document.body) {
@@ -124,7 +124,7 @@ export async function forceClick(button, retries = 3) {
       
       // 가시성 확보
       button.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 150));
       
       const rect = button.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
@@ -202,7 +202,7 @@ export async function forceClick(button, retries = 3) {
         clientY: centerY
       });
       button.dispatchEvent(clickEvent);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 60));
       
       // 마지막 수단
       try {
@@ -210,14 +210,14 @@ export async function forceClick(button, retries = 3) {
       } catch (e) {
         console.warn('[SAT-DEBUG] button.click() 실패 (예상됨):', e);
       }
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 60));
       
       // URL 변경 확인
       if (window.location.href !== currentUrl) {
         console.error('[SAT-DEBUG] URL이 변경되었습니다! 다른 창으로 넘어갔을 수 있습니다.');
         // 원래 URL로 복귀 시도
         window.history.back();
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 500));
         return false;
       }
       
@@ -226,7 +226,7 @@ export async function forceClick(button, retries = 3) {
     } catch (error) {
       console.warn(`[SAT-DEBUG] forceClick 실패 (${i + 1}/${retries}):`, error);
       if (i < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 250));
       }
     }
   }
@@ -267,9 +267,9 @@ export async function safeClick(button, retries = CONFIG.retries.buttonClick) {
       
       // mousedown + mouseup 시퀀스
       button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1 }));
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 60));
       button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, buttons: 1 }));
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 60));
       button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       
       return true;

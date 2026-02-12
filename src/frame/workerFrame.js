@@ -79,12 +79,29 @@ export async function findWorkerFrame() {
     
     window.addEventListener('message', onMsg);
     
-    // 모든 프레임에 브로드캐스트
-    console.log('[FRAME] probe sent to N frames', {
+    // 같은 origin 프레임에만 probe 전송 (다른 origin에 보내면 구글 개인정보/계정 선택 창 등이 반응할 수 있음)
+    const targetOrigin = location.origin;
+    let sentCount = 0;
+    for (let i = 0; i < window.frames.length; i++) {
+      try {
+        const frame = window.frames[i];
+        if (frame.location && frame.location.origin === targetOrigin) {
+          frame.postMessage({ type: 'SAT_PROBE', probeId }, targetOrigin);
+          sentCount++;
+        }
+      } catch (e) {
+        // cross-origin frame 접근 불가 - 스킵
+      }
+    }
+    // same-origin frame이 없으면 현재 window에 broadcast (fallback)
+    if (sentCount === 0) {
+      window.postMessage({ type: 'SAT_PROBE', probeId }, targetOrigin);
+    }
+    console.log('[FRAME] probe sent to frames', {
       frameCount: window.frames.length,
+      sentCount,
       probeId: probeId
     });
-    window.postMessage({ type: 'SAT_PROBE', probeId }, '*');
   });
 }
 

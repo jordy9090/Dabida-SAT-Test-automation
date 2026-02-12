@@ -71,7 +71,8 @@ export { selectNextButton, findNavigationButton } from './query.js';
 // 다음은 buttons.js에 남아있는 함수들 (클릭 액션만)
 
 // 제출 버튼 클릭 (확인 팝업 처리 포함) - satRoot 스코프로 제한
-export async function clickSubmitWithConfirmation() {
+// onAfterConfirmClick: 확인 버튼 클릭 직후, waitForContentLoad 전에 실행되는 콜백 (27번 등 화면 전환 빠른 케이스에서 정답 캡처용)
+export async function clickSubmitWithConfirmation(onAfterConfirmClick) {
   console.log('[SUBMIT] 제출 버튼 찾는 중...');
   
   // SAT root container 찾기
@@ -81,12 +82,33 @@ export async function clickSubmitWithConfirmation() {
     return false;
   }
   
+  // 이미 확인 팝업이 열려 있는지 먼저 확인 (모듈 완료 시)
+  const modalsFirst = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="dialog"], [class*="cdk-overlay-pane"]');
+  for (const modal of modalsFirst) {
+    if (!isElementVisible(modal)) continue;
+    const modalButtons = modal.querySelectorAll('button, [role="button"]');
+    for (const btn of modalButtons) {
+      if (!isElementVisible(btn) || btn.disabled) continue;
+      const text = (btn.innerText || btn.textContent || '').trim();
+      const ariaLabel = (btn.getAttribute('aria-label') || '').trim();
+      if ((text === '제출' || text.includes('Submit') || text === '확인') && !text.includes('취소')) {
+        console.log('[SUBMIT] 이미 열린 확인 팝업에서 제출 버튼 클릭');
+        btn.click();
+        if (typeof onAfterConfirmClick === 'function') {
+          await onAfterConfirmClick();
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+        return true;
+      }
+    }
+  }
+  
   // 제출 버튼 텍스트 후보 확장 (정답 확인/Check/Answer 포함)
   const SUBMIT_KEYWORDS_KO = ['제출', '정답', '확인', '채점', '정답 확인', '정답확인', '채점하기', '정답보기'];
   const SUBMIT_KEYWORDS_EN = ['submit', 'check', 'answer', 'confirm', 'check answer', 'checkanswer', 'show answer', 'view answer'];
   
-  // choice 클릭 후 enable 대기 (200~500ms)
-  await new Promise(resolve => setTimeout(resolve, 300));
+  // choice 클릭 후 enable 대기
+  await new Promise(resolve => setTimeout(resolve, 15));
   
   // Step 1: satRoot 안에서 button / [role="button"] 전부 수집
   const allButtons = Array.from(satRoot.querySelectorAll('button, [role="button"]'));
@@ -156,14 +178,14 @@ export async function clickSubmitWithConfirmation() {
   // 제출 버튼 클릭
   console.log('[SUBMIT] 제출 버튼 클릭');
   submitButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  await new Promise(resolve => setTimeout(resolve, 200));
+  await new Promise(resolve => setTimeout(resolve, 10));
   submitButton.click();
-  await waitForContentLoad(2000);
+  await waitForContentLoad(120);
   
   // 확인 팝업 대기 및 처리 (satRoot 내부 또는 모달 내부에서 찾기)
-  const maxWait = 20; // 최대 4초 대기
+  const maxWait = 40; // 최대 2초 대기 (50ms * 40)
   for (let i = 0; i < maxWait; i++) {
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise(resolve => setTimeout(resolve, 30));
     
     // 확인 팝업의 제출 버튼 찾기 (모달 내부 우선)
     const modals = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="dialog"]');
@@ -202,12 +224,18 @@ export async function clickSubmitWithConfirmation() {
     if (confirmSubmitButton) {
       console.log('[SUBMIT] 확인 팝업에서 제출 버튼 클릭');
       confirmSubmitButton.click();
-      await waitForContentLoad(3000);
+      if (typeof onAfterConfirmClick === 'function') {
+        await onAfterConfirmClick();
+      }
+      await waitForContentLoad(150);
       return true;
     }
   }
   
   console.warn('[SUBMIT] 확인 팝업을 찾을 수 없습니다. (팝업이 없을 수도 있음)');
+  if (typeof onAfterConfirmClick === 'function') {
+    await onAfterConfirmClick();
+  }
   return true; // 팝업이 없을 수도 있음
 }
 
@@ -226,7 +254,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
   for (let retry = 0; retry < maxRetries; retry++) {
     if (retry > 0) {
       console.log(`[SAT PDF Exporter] 다음 버튼 클릭 재시도 ${retry}/${maxRetries}`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 80));
     }
     
     // STEP 2: 진행 상황 읽기 (클릭 전)
@@ -327,10 +355,10 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
     if (nextButton.disabled || nextButton.getAttribute('aria-disabled') === 'true') {
       console.log('[SAT PDF Exporter] 다음 버튼이 비활성화됨. 활성화 대기...');
       let waitAttempts = 0;
-      const maxWaitAttempts = 30; // 최대 6초 대기
+      const maxWaitAttempts = 30; // 최대 1.5초 대기
       
       while (waitAttempts < maxWaitAttempts && (nextButton.disabled || nextButton.getAttribute('aria-disabled') === 'true')) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 30));
         waitAttempts++;
         
         // 버튼을 다시 찾기 (DOM이 업데이트되었을 수 있음)
@@ -347,8 +375,8 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
         console.log('[SAT PDF Exporter] 다음 버튼이 계속 비활성화되어 있습니다.');
         // 마지막 문제일 수 있음
         const progressState = getProgressState();
-        if (progressState && progressState.match(/\d+\s*\/\s*27/) && progressState.includes('27')) {
-          console.log('[SAT PDF Exporter] 27/27 도달 - 마지막 문제입니다.');
+        if (progressState && (progressState.match(/\d+\s*\/\s*27/) || progressState.match(/\d+\s*\/\s*22/)) && (progressState.includes('27') || progressState.includes('22'))) {
+          console.log('[SAT PDF Exporter] 마지막 문제 도달 (progress:', progressState, ')');
           return true;
         }
         continue;
@@ -362,14 +390,14 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
     // 폴백 전략 1: scrollIntoView 후 클릭
     try {
       nextButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 30));
     } catch (e) {
       console.warn('[SAT-DEBUG] scrollIntoView 실패, 전체 스크롤 시도:', e);
       // scrollIntoView 실패 시 전체 스크롤
       window.scrollTo(0, document.body.scrollHeight);
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 80));
       window.scrollTo(0, 0);
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 80));
     }
     
     console.log(`[SAT-DEBUG] 다음 버튼 클릭 시도 (${beforeProblemNum} → 다음) callId=${callId}, clickCount=${clickCount}`);
@@ -393,7 +421,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
       clickCount++;
       clickPerformed = true;
       console.log(`[NEXT-DEBUG] ✓ Next 버튼 클릭 완료: click() 메서드 사용, callId=${callId}, clickCount=${clickCount}`);
-      await new Promise(resolve => setTimeout(resolve, 100)); // 클릭 후 짧은 대기
+      await new Promise(resolve => setTimeout(resolve, 10)); // 클릭 후 짧은 대기
     } catch (e) {
       console.warn('[SAT-DEBUG] click() 메서드 실패, dispatchEvent 폴백 시도:', e);
       clickPerformed = false;
@@ -410,7 +438,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
     
     // click() 메서드로 클릭한 경우 성공 판정 루프 시작
     while (attempts < maxAttempts && !success && clickPerformed) {
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 80));
       attempts++;
       
       // STEP 2: 진행 상황 읽기 (클릭 후)
@@ -431,9 +459,9 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
             
             try {
               altButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              await new Promise(resolve => setTimeout(resolve, 300));
+              await new Promise(resolve => setTimeout(resolve, 120));
               altButton.click();
-              await new Promise(resolve => setTimeout(resolve, 1000));
+              await new Promise(resolve => setTimeout(resolve, 80));
               
               const altNextProgress = readProgressNumber();
               if (altNextProgress !== null && prevProgress !== null) {
@@ -475,7 +503,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
       if (afterProblemNum < beforeProblemNum && afterProblemNum > 0) {
         console.warn(`[SAT PDF Exporter] 문제 번호가 감소함: ${beforeProblemNum} → ${afterProblemNum} (detection bug 의심)`);
         // DOM 요소에서 다시 읽기 시도
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 120));
         const retryProblemNum = getCurrentProblemNumber();
         if (retryProblemNum > afterProblemNum && retryProblemNum > beforeProblemNum) {
           success = true;
@@ -561,7 +589,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
           (nextButton.disabled || nextButton.getAttribute('aria-disabled') === 'true')) {
         // 버튼이 활성화되었지만 아직 문제가 안 바뀌었을 수 있음
         // 조금 더 대기
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 250));
         const finalProblemNum = getCurrentProblemNumber();
         if (finalProblemNum !== beforeProblemNum && finalProblemNum > beforeProblemNum) {
           success = true;
@@ -599,8 +627,16 @@ export async function clickFirstChoice(sectionType = 'reading') {
   // 수학 섹션 예외 처리: 주관식 입력창 최우선 탐색
   if (sectionType === 'math') {
     console.log('[SAT-DEBUG] 수학 섹션 - 주관식 입력창 우선 탐색');
-    // 숫자 입력창 찾기 (Shadow DOM 포함)
-    const numberInputs = deepQuerySelectorAll('input[type="number"], input[type="text"][pattern*="[0-9]"], textarea[placeholder*="number"], input[type="text"][inputmode="numeric"]');
+    // 주관식 입력창 찾기 (Shadow DOM 포함) - "여기에 입력하세요" 등 다양한 placeholder 지원
+    const combinedSel = 'input[type="number"], input[type="text"][inputmode="numeric"], input[type="text"][pattern*="[0-9]"], input[placeholder*="입력"], input[placeholder*="여기에"], input[placeholder*="Enter"], textarea[placeholder*="입력"], textarea[placeholder*="여기에"], input[type="text"], textarea';
+    const allInputs = deepQuerySelectorAll(combinedSel, document.body);
+    // 채팅/메시지 입력창 제외, 문제 영역 또는 placeholder 있는 입력 우선
+    const numberInputs = allInputs.filter(inp => {
+      const plc = (inp.getAttribute('placeholder') || '').toLowerCase();
+      const isChatInput = plc.includes('message') || plc.includes('chat') || plc.includes('메시지') || inp.closest('[class*="chat-input"], [class*="message-input"]');
+      if (isChatInput) return false;
+      return true;
+    });
     for (const input of numberInputs) {
       if (!isElementVisible(input) || input.disabled) continue;
       
@@ -608,36 +644,36 @@ export async function clickFirstChoice(sectionType = 'reading') {
       
       // 포커스 후 지연 (수학 주관식 입력 지연)
       input.focus();
-      await new Promise(resolve => setTimeout(resolve, 500)); // 0.5초 대기
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       // 값 입력 (보강)
       input.value = '1';
       
       // input 이벤트를 반드시 먼저 호출 (값이 안 들어가는 경우 방지)
       input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 30));
       
       // 값이 실제로 들어갔는지 확인
       if (input.value !== '1') {
         console.warn('[SAT-DEBUG] 값이 안 들어감, 재시도');
         input.value = '1';
         input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 30));
       }
       
       // change, blur 이벤트 발생
       input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 30));
       
       input.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 30));
       
       // 추가로 keydown, keyup 이벤트도 발생 (일부 UI가 이를 요구할 수 있음)
       input.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise(resolve => setTimeout(resolve, 15));
       
       input.dispatchEvent(new KeyboardEvent('keyup', { key: '1', bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise(resolve => setTimeout(resolve, 15));
       
       console.log('[SAT-DEBUG] 수학 주관식 입력 완료: value =', input.value);
       return true;
@@ -720,7 +756,8 @@ export async function clickFirstChoice(sectionType = 'reading') {
     const hasOnclick = target.hasAttribute('onclick');
     const hasTabindex = target.getAttribute('tabindex') !== null && parseInt(target.getAttribute('tabindex')) >= 0;
     const hasAriaChecked = target.getAttribute('aria-checked') !== null || target.getAttribute('aria-selected') !== null;
-    const isClickable = hasOnclick || hasTabindex || hasAriaChecked || target.tagName === 'BUTTON' || target.tagName === 'LABEL';
+    const isStandardClickable = hasOnclick || hasTabindex || hasAriaChecked || target.tagName === 'BUTTON' || target.tagName === 'LABEL';
+    const isClickable = isStandardClickable || (candidate.isTextFallback && el && el.offsetParent);
     
     return {
       element: target,
@@ -755,7 +792,7 @@ export async function clickFirstChoice(sectionType = 'reading') {
   // 클릭 시퀀스: scrollIntoView → pointerdown → mousedown → mouseup → click
   try {
     targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 30));
     
     // pointerdown
     targetElement.dispatchEvent(new PointerEvent('pointerdown', {
@@ -763,7 +800,7 @@ export async function clickFirstChoice(sectionType = 'reading') {
       cancelable: true,
       pointerId: 1
     }));
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 10));
     
     // mousedown
     targetElement.dispatchEvent(new MouseEvent('mousedown', {
@@ -771,7 +808,7 @@ export async function clickFirstChoice(sectionType = 'reading') {
       cancelable: true,
       buttons: 1
     }));
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 10));
     
     // mouseup
     targetElement.dispatchEvent(new MouseEvent('mouseup', {
@@ -779,11 +816,11 @@ export async function clickFirstChoice(sectionType = 'reading') {
       cancelable: true,
       buttons: 1
     }));
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 10));
     
     // click
     targetElement.click();
-    await new Promise(resolve => setTimeout(resolve, 80)); // 짧은 대기 후 상태 확인
+    await new Promise(resolve => setTimeout(resolve, 25)); // 짧은 대기 후 상태 확인
     
     // 클릭 후 상태 확인
     const afterClass = targetElement.className;
@@ -820,9 +857,9 @@ export async function clickFirstChoice(sectionType = 'reading') {
         
         const retryBeforeClass = nextTarget.element.className;
         nextTarget.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 20));
         nextTarget.element.click();
-        await new Promise(resolve => setTimeout(resolve, 80));
+        await new Promise(resolve => setTimeout(resolve, 25));
         
         const retryAfterClass = nextTarget.element.className;
         const retryGraded = /answered-(correct|incorrect)/.test(retryAfterClass);

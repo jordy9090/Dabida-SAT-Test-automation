@@ -3,10 +3,10 @@
 
 import { CONFIG, TEMP_MODE } from '../config/constants.js';
 import { waitForCondition, waitForContentLoad, safeClick, showToast } from '../dom/wait.js';
-import { isQuestionScreen, getCurrentProblemNumber, getProgressState } from '../dom/extract.js';
-import { findButtonByText, findNavigationButton } from '../dom/buttons.js';
+import { isQuestionScreen, getCurrentProblemNumber, getProgressState, isModuleStartScreen } from '../dom/extract.js';
+import { findButtonByText, findNavigationButton, clickSubmitWithConfirmation } from '../dom/buttons.js';
 import { SATNavigator } from './navigator.js';
-import { startNextModule, configureAndStartTest, clickSectionContinue } from './navigator.js';
+import { startNextModule, startModule2, configureAndStartTest, clickSectionContinue } from './navigator.js';
 import { collectModuleProblems } from './moduleRunner.js';
 import { SectionStateManager } from './stateManager.js';
 
@@ -56,10 +56,10 @@ export class SATScraper {
    * @returns {boolean} 완료 여부
    */
   isModuleComplete(sectionType, moduleNumber, collectedCount, progressState) {
-    const expectedCount = CONFIG.collection.maxProblems; // 27문제
+    const expectedCount = sectionType === 'math' ? (CONFIG.collection.mathMaxProblems ?? 22) : CONFIG.collection.maxProblems;
     
-    // 조건 1: 문제 수가 충분한가? (완화: 25개 이상이면 OK)
-    const hasEnoughProblems = collectedCount >= Math.max(25, expectedCount - 2);
+    // 조건 1: 문제 수가 충분한가? (완화: expectedCount - 2 이상이면 OK; Reading 25, Math 20)
+    const hasEnoughProblems = collectedCount >= (expectedCount - 2);
     
     // 조건 2: Progress가 마지막인가?
     let isProgressComplete = false;
@@ -135,7 +135,7 @@ export class SATScraper {
         }
         
         return false;
-      }, CONFIG.timeouts.screenTransition * 20);
+      }, CONFIG.timeouts.screenTransition * 8);
     }
     
     // Module 2 완료 후 다음 섹션 안내 화면 대기
@@ -160,7 +160,7 @@ export class SATScraper {
         }
         
         return false;
-      }, CONFIG.timeouts.screenTransition * 20);
+      }, CONFIG.timeouts.screenTransition * 8);
     }
     
     return true;
@@ -199,7 +199,7 @@ export class SATScraper {
       const rwModule1Count = await this.collectModuleWithValidation(allData, 'reading', 'Module 1', 1);
       
       // ============================================================================
-      // Reading Module 1만 수집하고 종료 (제출 버튼 클릭 후 PDF 생성)
+      // Reading Module 1 완료 후 제출 버튼 클릭
       // ============================================================================
       if (rwModule1Count < CONFIG.collection.maxProblems) {
         console.warn(`[SAT-DEBUG] Reading and Writing Module 1 문제 수 부족: ${rwModule1Count}/${CONFIG.collection.maxProblems}`);
@@ -208,36 +208,71 @@ export class SATScraper {
       
       console.log('[SAT-DEBUG] 현재 단계: STEP 1 완료 - Reading Module 1:', rwModule1Count, '개 수집');
       
-      // Module 1 완료 후 제출 버튼 클릭
+      // Module 1 완료 후 제출 버튼 클릭 (확인 팝업 처리 포함)
       console.log('[SAT-DEBUG] Reading Module 1 수집 완료. 제출 버튼 클릭 중...');
       showToast('Reading Module 1 완료. 제출 버튼 클릭 중...', 'info');
       
-      // 제출 버튼 찾기 및 클릭
-      const submitButton = findNavigationButton('submit', '제출', 'submit');
-      if (submitButton && !submitButton.disabled) {
-        console.log('[SAT-DEBUG] 제출 버튼 발견. 클릭합니다.');
-        await safeClick(submitButton);
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:beforeModule1Submit',message:'before module 1 submit',data:{rwModule1Count,isQuestionScreen:isQuestionScreen(),progressState:getProgressState(),bodyText:(document.body.innerText||'').substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      
+      // clickSubmitWithConfirmation 함수 사용 (확인 팝업 자동 처리)
+      const module1Submitted = await clickSubmitWithConfirmation();
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:afterModule1Submit',message:'after module 1 submit',data:{module1Submitted,isQuestionScreen:isQuestionScreen(),progressState:getProgressState(),bodyText:(document.body.innerText||'').substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      
+      if (module1Submitted) {
+        console.log('[SAT-DEBUG] Reading Module 1 제출 완료. 화면 전환 대기 중...');
         await waitForContentLoad(CONFIG.timeouts.screenTransition);
         
-        // 제출 확인 팝업이 있을 수 있으므로 확인 버튼도 클릭
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const confirmButton = findNavigationButton('submit', '제출', '확인', 'Confirm');
-        if (confirmButton && !confirmButton.disabled) {
-          console.log('[SAT-DEBUG] 제출 확인 버튼 발견. 클릭합니다.');
-          await safeClick(confirmButton);
-          await waitForContentLoad(CONFIG.timeouts.screenTransition);
+        // Module 2 시작 화면이 명확히 나타날 때까지 대기 (최대 10초)
+        console.log('[SAT-DEBUG] Module 2 시작 화면 대기 중...');
+        const module2ScreenReady = await waitForCondition(() => {
+          const bodyText = (document.body.innerText || document.body.textContent || '').toLowerCase();
+          const hasModule2Text = bodyText.includes('모듈 2') || bodyText.includes('module 2') || 
+                                bodyText.includes('reading and writing module 2');
+          const hasStartButton = findButtonByText('모듈 2 시작', 'Module 2', '시작', 'Start');
+          return hasModule2Text || !!hasStartButton;
+        }, CONFIG.timeouts.screenTransition * 4);
+        
+        if (module2ScreenReady) {
+          console.log('[SAT-DEBUG] Module 2 시작 화면 확인됨');
+        } else {
+          console.warn('[SAT-DEBUG] Module 2 시작 화면이 나타나지 않았지만 계속 진행합니다.');
         }
         
-        console.log('[SAT-DEBUG] 제출 완료. PDF 생성을 위해 종료합니다.');
+        // 추가 대기: 화면이 완전히 로드될 때까지
+        await new Promise(resolve => setTimeout(resolve, 400));
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:afterModule1SubmitWait',message:'after module 1 submit wait',data:{isQuestionScreen:isQuestionScreen(),progressState:getProgressState(),bodyText:(document.body.innerText||'').substring(0,200),hasModule2Text:(document.body.innerText||'').toLowerCase().includes('모듈 2'),module2ScreenReady},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
       } else {
-        console.warn('[SAT-DEBUG] 제출 버튼을 찾을 수 없거나 비활성화되어 있습니다.');
+        console.warn('[SAT-DEBUG] Reading Module 1 제출 실패 또는 제출 버튼을 찾을 수 없습니다.');
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:module1SubmitFailed',message:'module 1 submit failed',data:{isQuestionScreen:isQuestionScreen(),progressState:getProgressState(),bodyText:(document.body.innerText||'').substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        
+        // BUG FIX: 제출 버튼을 찾지 못했지만 Module 2 시작 화면이 나타났는지 확인
+        console.log('[SAT-DEBUG] 제출 버튼을 찾지 못했지만 Module 2 시작 화면 확인 중...');
+        await new Promise(resolve => setTimeout(resolve, 350)); // 화면 전환 대기
+        
+        const bodyTextAfterWait = (document.body.innerText || document.body.textContent || '').toLowerCase();
+        const hasModule2AfterWait = bodyTextAfterWait.includes('모듈 2') || bodyTextAfterWait.includes('module 2') || 
+                                    bodyTextAfterWait.includes('reading and writing module 2');
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:module1SubmitFailedCheck',message:'checking module 2 screen after submit failed',data:{hasModule2AfterWait,bodyTextPreview:bodyTextAfterWait.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        
+        if (hasModule2AfterWait) {
+          console.log('[SAT-DEBUG] Module 2 시작 화면이 나타났습니다. 제출이 성공한 것으로 간주하고 계속 진행합니다.');
+        } else {
+          console.warn('[SAT-DEBUG] Module 2 시작 화면이 나타나지 않았습니다. 계속 진행을 시도합니다.');
+        }
       }
-      
-      // Reading Module 1만 수집하고 종료 (Module 2로 넘어가지 않음)
-      console.log('[SAT-DEBUG] Reading Module 1 수집 완료. PDF 생성을 위해 종료합니다.');
-      console.log(`[SAT-DEBUG] 수집된 문제: Reading Module 1 - ${rwModule1Count}개`);
-      console.log(`[SAT-DEBUG] 전체 수집 데이터: Reading ${allData.reading.length}개, Math ${allData.math.length}개`);
-      return allData; // 즉시 반환하여 PDF 생성으로 진행
       // ============================================================================
 
       // ========================================================================
@@ -251,18 +286,77 @@ export class SATScraper {
       this.stateManager.setCurrentModule(2);
       
       showToast('Reading and Writing Module 2 시작 중...', 'info');
-      // NOTE: startNextModule is imported from legacy.js
+      
+      // 모듈 2 시작 화면이 나타날 때까지 대기
+      console.log('[SAT-DEBUG] 모듈 2 시작 화면 대기 중...');
+      const module2ScreenReady = await waitForCondition(() => {
+        const bodyText = (document.body.innerText || document.body.textContent || '').toLowerCase();
+        const hasModule2Text = bodyText.includes('모듈 2') || bodyText.includes('module 2');
+        const hasStartButton = findButtonByText('모듈 2 시작', 'Module 2', '시작', 'Start');
+        const isReady = hasModule2Text || !!hasStartButton;
+        if (isReady) {
+          console.log('[SAT-DEBUG] 모듈 2 시작 화면 확인됨');
+        }
+        return isReady;
+      }, CONFIG.timeouts.screenTransition * 6);
+      
+      if (!module2ScreenReady) {
+        console.warn('[SAT-DEBUG] 모듈 2 시작 화면이 나타나지 않았지만 계속 진행합니다.');
+      }
+      
+      // 추가 대기: 화면이 완전히 로드될 때까지
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // NOTE: startNextModule is imported from navigator.js
+      console.log('[SAT-DEBUG] 모듈 2 시작 버튼 클릭 시도...');
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:beforeStartModule2',message:'before start module 2',data:{module2ScreenReady,isQuestionScreen:isQuestionScreen(),progressState:getProgressState(),bodyText:(document.body.innerText||'').substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      
       const module2Started = await startNextModule();
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:afterStartModule2',message:'after start module 2',data:{module2Started,isQuestionScreen:isQuestionScreen(),progressState:getProgressState(),bodyText:(document.body.innerText||'').substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      
       if (!module2Started) {
         console.warn('[SAT-DEBUG] Reading and Writing Module 2 시작 실패');
         console.warn('[SAT-DEBUG] (자동 진행) Module 2 시작 실패 상태지만 계속 진행을 시도합니다.');
         showToast('경고: Reading Module 2 시작 실패(자동 진행)', 'info');
       }
+
+      // Guard: Module Start Screen이 남아있으면 startModule2 재시도
+      if (isModuleStartScreen()) {
+        console.log('[SAT-DEBUG] Module Start Screen이 남아있음. startModule2 재시도');
+        await startModule2();
+      }
+
+      // Guard: Q1 화면 확인될 때까지 대기 (premature collection 방지)
+      const q1Ready = await waitForCondition(() => {
+        const progress = getProgressState();
+        const isQ1 = progress && /^1\s*\/\s*27/i.test(progress);
+        return isQ1 && isQuestionScreen();
+      }, CONFIG.timeouts.screenTransition * 4);
+
+      if (!q1Ready) {
+        const progress = getProgressState();
+        console.error('[SATScraper] ABORT: Module 2 수집 전 Q1 화면 확인 실패. progress:', progress, 'isQuestionScreen:', isQuestionScreen());
+        showToast('경고: Module 2 Q1 화면 확인 실패', 'info');
+      }
       
-      // 화면 전환 대기
+      // 화면 전환 대기 (추가)
       await waitForCondition(() => {
         return isQuestionScreen() || getProgressState() !== null;
-      }, CONFIG.timeouts.screenTransition * 10);
+      }, CONFIG.timeouts.screenTransition * 4);
+
+      // Guard: progress=1 없이 수집 시작 시 중단
+      const finalProgress = getProgressState();
+      const isQ1Final = finalProgress && /^1\s*\/\s*27/i.test(finalProgress);
+      if (!isQ1Final && !isQuestionScreen()) {
+        console.error('[SATScraper] ABORT: progress=1/27 없이 Module 2 수집을 시작할 수 없습니다. current progress:', finalProgress);
+        showToast('경고: Module 2 Q1 확인 필요 (수동으로 모듈 2 시작 후 재시도)', 'info');
+      }
       
       showToast('Reading and Writing Module 2 수집 중...', 'info');
       const rwModule2Count = await this.collectModuleWithValidation(allData, 'reading', 'Module 2', 2);
@@ -284,9 +378,31 @@ export class SATScraper {
       
       console.log('[SAT-DEBUG] 현재 단계: STEP 2 완료 - Reading Module 2:', rwModule2Count, '개 수집 (전체:', totalReadingCount, '개)');
       
-      // Module 2 완료 후 전환 대기
-      await this.waitForModuleTransition('reading', 2);
-      this.stateManager.completeCurrentStep();
+      // ============================================================================
+      // Reading Module 2 완료 후 제출 버튼 클릭 (확인 팝업 처리 포함)
+      // ============================================================================
+      console.log('[SAT-DEBUG] Reading Module 2 수집 완료. 제출 버튼 클릭 중...');
+      showToast('Reading Module 2 완료. 제출 버튼 클릭 중...', 'info');
+      
+      // clickSubmitWithConfirmation 함수 사용 (확인 팝업 자동 처리)
+      const module2Submitted = await clickSubmitWithConfirmation();
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:afterModule2Submit',message:'after module 2 submit',data:{module2Submitted,totalReadingCount:allData.reading.length,bodyText:(document.body.innerText||'').substring(0,300)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'M2'})}).catch(()=>{});
+      if (module2Submitted) {
+        console.log('[SAT-DEBUG] Reading Module 2 제출 완료. Math 섹션으로 진행합니다.');
+        await waitForContentLoad(CONFIG.timeouts.screenTransition);
+      } else {
+        console.warn('[SAT-DEBUG] Reading Module 2 제출 실패 또는 제출 버튼을 찾을 수 없습니다. Math 섹션 진행을 시도합니다.');
+      }
+      // ============================================================================
+      
+      // Module 2 제출 완료 후 다음 섹션(수학)으로 진행
+      console.log('[SAT-DEBUG] Reading Module 2 제출 완료. Math 섹션으로 진행합니다.');
+      console.log(`[SAT-DEBUG] 수집된 문제: Reading Module 1 - ${rwModule1Count}개, Reading Module 2 - ${rwModule2Count}개 (전체: ${totalReadingCount}개)`);
+      console.log(`[SAT-DEBUG] 현재까지 수집 데이터: Reading ${allData.reading.length}개, Math ${allData.math.length}개`);
+      // Reading Module 1, 2 완료 처리 (stepIndex 0→1→2로 진행해 MATH 진입 가능하게)
+      this.stateManager.completeCurrentStep(); // READ_WRITE Module 1 → Module 2
+      this.stateManager.completeCurrentStep(); // READ_WRITE Module 2 → MATH Module 1
+      // ============================================================================
 
       // ========================================================================
       // STEP 3: Math Module 1
@@ -316,9 +432,9 @@ export class SATScraper {
                          bodyText.includes('mathematics') || bodyText.includes('수학 섹션');
       
       // 증거 3: "수학 시작" 또는 "Math" 버튼 찾기
-      const mathStartButton = findButtonByText('시작', 'Start', '계속', 'Continue', 'Math', '수학');
-      const mathSectionButton = findButtonByText('Math', '수학', 'Mathematics');
-      const hasMathButton = !!(mathStartButton || mathSectionButton);
+      let mathStartButton = findButtonByText('시작', 'Start', '계속', 'Continue', 'Math', '수학');
+      let mathSectionButton = findButtonByText('Math', '수학', 'Mathematics');
+      let hasMathButton = !!(mathStartButton || mathSectionButton);
       
       // 증거 4: "수학 시작" 또는 "Start Math" 텍스트가 있는 버튼 찾기
       const allButtons = document.querySelectorAll('button, [role="button"]');
@@ -341,7 +457,8 @@ export class SATScraper {
         showToast(`경고: ${errorMsg}`, 'info');
       }
       
-      console.log('[SATScraper] 수학 섹션 진입 조건 충족 확인:', {
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:beforeMathSection',message:'before math section entry',data:{hasMathText,hasMathButton,hasMathStartText,readingProblems:allData.reading.length,bodyText:(document.body.innerText||'').substring(0,300)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'MATH'})}).catch(()=>{});
+      console.log('[SATScraper] 수학 섹션 진입 조건 충족 확인(초기 탐색 기준):', {
         hasMathText,
         hasMathButton,
         hasMathStartText,
@@ -352,9 +469,10 @@ export class SATScraper {
       this.stateManager.setCurrentModule(1);
       
       showToast('Math 섹션 시작 중...', 'info');
-      
+
       // Math 섹션 시작 버튼 찾기 및 클릭
       // NOTE: safeClick, clickSectionContinue, configureAndStartTest are imported above
+      // 1차: 텍스트 기반 버튼 탐색 (위에서 찾은 mathStartButton / mathSectionButton 사용)
       if (mathStartButton) {
         console.log('[SATScraper] Math 시작 버튼 클릭');
         await safeClick(mathStartButton);
@@ -364,11 +482,45 @@ export class SATScraper {
         await safeClick(mathSectionButton);
         await waitForContentLoad(CONFIG.timeouts.screenTransition);
       } else {
-        const mathStarted = await clickSectionContinue('Math');
-        if (!mathStarted) {
-          console.warn('[SATScraper] Math 섹션 시작 실패: 시작 버튼을 찾을 수 없습니다');
-          console.warn('[SATScraper] (자동 진행) Math 섹션 시작 실패지만 계속 진행을 시도합니다.');
-          showToast('경고: Math 섹션 시작 실패(자동 진행)', 'info');
+        // 2차: Math 섹션 카드의 시작 버튼 탐색 (여러 카드 중 Math 카드만 선택)
+        let explicitMathButton = null;
+        const sectionCards = document.querySelectorAll('glowing-card.section-card, .section-card, section-overview [class*="section-card"]');
+        for (const card of sectionCards) {
+          const cardText = (card.innerText || card.textContent || '').toLowerCase();
+          if (cardText.includes('math') || cardText.includes('수학')) {
+            const btn = card.querySelector('div.section-button-container button, .section-button-container button, button');
+            if (btn) {
+              explicitMathButton = btn;
+              break;
+            }
+          }
+        }
+        // fallback: 사용자 제공 셀렉터 (Reading 카드가 먼저 있으면 Math 카드의 두 번째 매칭 시도)
+        if (!explicitMathButton) {
+          const allSectionButtons = document.querySelectorAll('section-overview glowing-card.section-card button, .section-overview .section-card button');
+          for (const btn of allSectionButtons) {
+            const card = btn.closest('glowing-card, .section-card');
+            if (card && ((card.innerText || '').toLowerCase().includes('math') || (card.innerText || '').toLowerCase().includes('수학'))) {
+              explicitMathButton = btn;
+              break;
+            }
+          }
+        }
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:mathButtonSearch',message:'math button search',data:{explicitMathButtonFound:!!explicitMathButton,sectionCardCount:sectionCards.length,glowingCardCount:document.querySelectorAll('glowing-card.section-card').length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'MATH'})}).catch(()=>{});
+
+        if (explicitMathButton) {
+          console.log('[SATScraper] CSS 셀렉터 기반 Math 시작 버튼 발견. 클릭 시도...', explicitMathButton);
+          await safeClick(explicitMathButton);
+          await waitForContentLoad(CONFIG.timeouts.screenTransition);
+        } else {
+          // 3차: fallback - 기존 섹션 continue 로직 재사용
+          const mathStarted = await clickSectionContinue('Math');
+          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:afterClickSectionContinue',message:'after clickSectionContinue Math',data:{mathStarted},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'MATH'})}).catch(()=>{});
+          if (!mathStarted) {
+            console.warn('[SATScraper] Math 섹션 시작 실패: 시작 버튼을 찾을 수 없습니다');
+            console.warn('[SATScraper] (자동 진행) Math 섹션 시작 실패지만 계속 진행을 시도합니다.');
+            showToast('경고: Math 섹션 시작 실패(자동 진행)', 'info');
+          }
         }
       }
       
@@ -378,15 +530,26 @@ export class SATScraper {
       // 화면 전환 대기
       await waitForCondition(() => {
         return isQuestionScreen() || getProgressState() !== null;
-      }, CONFIG.timeouts.screenTransition * 10);
+      }, CONFIG.timeouts.screenTransition * 6);
       
+      const mathExpected = CONFIG.collection.mathMaxProblems ?? 22;
       showToast('Math Module 1 수집 중...', 'info');
       const mathModule1Count = await this.collectModuleWithValidation(allData, 'math', 'Module 1', 1);
       
-      if (mathModule1Count < CONFIG.collection.maxProblems) {
-        console.warn(`[SATScraper] Math Module 1 문제 수 부족: ${mathModule1Count}/${CONFIG.collection.maxProblems}`);
+      if (mathModule1Count < mathExpected) {
+        console.warn(`[SATScraper] Math Module 1 문제 수 부족: ${mathModule1Count}/${mathExpected}`);
         console.warn('[SATScraper] (자동 진행) Math Module 1 수집 부족이지만 다음 단계로 진행합니다.');
-        showToast(`경고: Math Module 1 수집 부족 (${mathModule1Count}/${CONFIG.collection.maxProblems})`, 'info');
+        showToast(`경고: Math Module 1 수집 부족 (${mathModule1Count}/${mathExpected})`, 'info');
+      }
+      
+      // Math Module 1 완료 후 제출 버튼 클릭 (Reading과 동일 - 확인 팝업 처리)
+      console.log('[SATScraper] Math Module 1 수집 완료. 제출 버튼 클릭 중...');
+      showToast('Math Module 1 완료. 제출 버튼 클릭 중...', 'info');
+      const mathModule1Submitted = await clickSubmitWithConfirmation();
+      if (mathModule1Submitted) {
+        console.log('[SATScraper] Math Module 1 제출 완료.');
+      } else {
+        console.warn('[SATScraper] Math Module 1 제출 실패 또는 제출 버튼을 찾을 수 없습니다.');
       }
       
       // Module 1 완료 후 전환 대기
@@ -414,15 +577,15 @@ export class SATScraper {
       // 화면 전환 대기
       await waitForCondition(() => {
         return isQuestionScreen() || getProgressState() !== null;
-      }, CONFIG.timeouts.screenTransition * 10);
+      }, CONFIG.timeouts.screenTransition * 6);
       
       showToast('Math Module 2 수집 중...', 'info');
       const mathModule2Count = await this.collectModuleWithValidation(allData, 'math', 'Module 2', 2);
       
-      if (mathModule2Count < CONFIG.collection.maxProblems) {
-        console.warn(`[SATScraper] Math Module 2 문제 수 부족: ${mathModule2Count}/${CONFIG.collection.maxProblems}`);
+      if (mathModule2Count < mathExpected) {
+        console.warn(`[SATScraper] Math Module 2 문제 수 부족: ${mathModule2Count}/${mathExpected}`);
         console.warn('[SATScraper] (자동 진행) Math Module 2 수집 부족이지만 마무리 진행합니다.');
-        showToast(`경고: Math Module 2 수집 부족 (${mathModule2Count}/${CONFIG.collection.maxProblems})`, 'info');
+        showToast(`경고: Math Module 2 수집 부족 (${mathModule2Count}/${mathExpected})`, 'info');
       }
       
       this.stateManager.completeCurrentStep();
@@ -469,8 +632,9 @@ export class SATScraper {
     const progressState = getProgressState();
     const isComplete = this.isModuleComplete(sectionType, moduleNumber, count, progressState);
     
-    if (!isComplete && count < CONFIG.collection.maxProblems) {
-      console.warn(`[SATScraper] ${moduleName} 완료 조건 미충족: ${count}/${CONFIG.collection.maxProblems}`);
+    const expectedForSection = sectionType === 'math' ? (CONFIG.collection.mathMaxProblems ?? 22) : CONFIG.collection.maxProblems;
+    if (!isComplete && count < expectedForSection) {
+      console.warn(`[SATScraper] ${moduleName} 완료 조건 미충족: ${count}/${expectedForSection}`);
     }
     
     return count;

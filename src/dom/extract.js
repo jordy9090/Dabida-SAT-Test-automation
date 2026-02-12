@@ -4,9 +4,504 @@
 import { deepQuerySelectorAll, isElementVisible } from './deepQuery.js';
 import { findSatRoot } from './query.js';
 
+// ============================================================================
+// Figure 추출 유틸리티 함수들
+// ============================================================================
+
+/**
+ * Blob을 DataURL로 변환
+ * @param {Blob} blob
+ * @returns {Promise<string>}
+ */
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * <img> 요소를 DataURL로 변환
+ * @param {HTMLImageElement} img
+ * @returns {Promise<{dataUrl: string, width: number, height: number} | null>}
+ */
+async function extractImageFromImg(img) {
+  try {
+    const src = img.currentSrc || img.src;
+    if (!src) return null;
+
+    // data: URL이면 그대로 사용
+    if (src.startsWith('data:')) {
+      const rect = img.getBoundingClientRect();
+      return {
+        dataUrl: src,
+        width: rect.width || img.naturalWidth || 100,
+        height: rect.height || img.naturalHeight || 100
+      };
+    }
+
+    // blob: 또는 https: URL이면 fetch로 변환
+    if (src.startsWith('blob:') || src.startsWith('http://') || src.startsWith('https://')) {
+      // CORS 설정 시도
+      if (img.tagName === 'IMG') {
+        img.crossOrigin = 'anonymous';
+      }
+
+      try {
+        const response = await fetch(src);
+        if (!response.ok) {
+          console.warn(`[FIGURE] 이미지 fetch 실패: ${src} (status: ${response.status})`);
+          return null;
+        }
+        const blob = await response.blob();
+        const dataUrl = await blobToDataURL(blob);
+        const rect = img.getBoundingClientRect();
+        return {
+          dataUrl,
+          width: rect.width || img.naturalWidth || 100,
+          height: rect.height || img.naturalHeight || 100
+        };
+      } catch (fetchError) {
+        console.warn(`[FIGURE] 이미지 fetch 오류: ${src}`, fetchError);
+        return null;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.warn('[FIGURE] extractImageFromImg 오류:', error);
+    return null;
+  }
+}
+
+/**
+ * <canvas> 요소를 DataURL로 변환
+ * @param {HTMLCanvasElement} canvas
+ * @returns {{dataUrl: string, width: number, height: number} | null}
+ */
+function extractImageFromCanvas(canvas) {
+  try {
+    const dataUrl = canvas.toDataURL('image/png');
+    return {
+      dataUrl,
+      width: canvas.width || canvas.getBoundingClientRect().width,
+      height: canvas.height || canvas.getBoundingClientRect().height
+    };
+  } catch (error) {
+    // tainted canvas 에러 등
+    console.warn('[FIGURE] extractImageFromCanvas 오류 (tainted canvas 가능):', error);
+    return null;
+  }
+}
+
+/**
+ * <svg> 요소를 DataURL로 변환
+ * @param {SVGElement} svg
+ * @returns {Promise<{dataUrl: string, width: number, height: number} | null>}
+ */
+async function extractImageFromSVG(svg) {
+  try {
+    const rect = svg.getBoundingClientRect();
+    const width = rect.width || 100;
+    const height = rect.height || 100;
+
+    // SVG outerHTML을 직렬화
+    const svgString = new XMLSerializer().serializeToString(svg);
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const svgUrl = URL.createObjectURL(svgBlob);
+
+    // 이미지로 로드 후 canvas에 그리기
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/png');
+          URL.revokeObjectURL(svgUrl);
+          resolve({ dataUrl, width, height });
+        } catch (error) {
+          console.warn('[FIGURE] SVG canvas draw 오류:', error);
+          URL.revokeObjectURL(svgUrl);
+          resolve(null);
+        }
+      };
+      img.onerror = () => {
+        console.warn('[FIGURE] SVG 이미지 로드 실패');
+        URL.revokeObjectURL(svgUrl);
+        resolve(null);
+      };
+      img.src = svgUrl;
+    });
+  } catch (error) {
+    console.warn('[FIGURE] extractImageFromSVG 오류:', error);
+    return null;
+  }
+}
+
+/**
+ * background-image CSS 속성에서 이미지 추출
+ * @param {HTMLElement} el
+ * @returns {Promise<{dataUrl: string, width: number, height: number} | null>}
+ */
+async function extractImageFromBackground(el) {
+  try {
+    const style = window.getComputedStyle(el);
+    const bgImage = style.backgroundImage;
+    if (!bgImage || bgImage === 'none') return null;
+
+    // url("...") 또는 url(...) 패턴 파싱
+    const match = bgImage.match(/url\(["']?([^"']+)["']?\)/);
+    if (!match) return null;
+
+    const url = match[1];
+    if (url.startsWith('data:')) {
+      const rect = el.getBoundingClientRect();
+      return {
+        dataUrl: url,
+        width: rect.width,
+        height: rect.height
+      };
+    }
+
+    // http/https/blob URL이면 fetch
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('blob:')) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        const dataUrl = await blobToDataURL(blob);
+        const rect = el.getBoundingClientRect();
+        return {
+          dataUrl,
+          width: rect.width,
+          height: rect.height
+        };
+      } catch (error) {
+        console.warn('[FIGURE] background-image fetch 오류:', error);
+        return null;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.warn('[FIGURE] extractImageFromBackground 오류:', error);
+    return null;
+  }
+}
+
+/**
+ * html2canvas로 DOM 요소를 이미지로 변환 (최종 폴백)
+ * @param {HTMLElement} el
+ * @returns {Promise<{dataUrl: string, width: number, height: number} | null>}
+ */
+async function extractImageWithHtml2Canvas(el) {
+  try {
+    // html2canvas가 로드되어 있는지 확인
+    let html2canvas = null;
+    if (window.html2canvas) {
+      html2canvas = window.html2canvas;
+    } else if (window.jspdf && window.jspdf.html2canvas) {
+      html2canvas = window.jspdf.html2canvas;
+    } else {
+      console.warn('[FIGURE] html2canvas를 찾을 수 없습니다');
+      return null;
+    }
+
+    const canvas = await html2canvas(el, {
+      backgroundColor: '#fff',
+      scale: 2, // 해상도 향상
+      useCORS: true,
+      allowTaint: false,
+      logging: false
+    });
+
+    const dataUrl = canvas.toDataURL('image/png');
+    return {
+      dataUrl,
+      width: canvas.width,
+      height: canvas.height
+    };
+  } catch (error) {
+    console.warn('[FIGURE] html2canvas 오류:', error);
+    return null;
+  }
+}
+
+/**
+ * figure 후보 요소 찾기
+ * @param {HTMLElement} satRoot
+ * @returns {Array<HTMLElement>}
+ */
+function findFigureCandidates(satRoot) {
+  const candidates = [];
+  const MIN_SIZE = 60; // 최소 크기 (px) - 작은 차트/그래프도 포함
+
+  // 우선순위 1: figure, .figure, data-testid, class에 figure/image 포함 (Shadow DOM 포함)
+  const figureSelectors = [
+    'figure',
+    '.figure',
+    '[data-testid*="figure"]',
+    '[data-testid*="image"]',
+    '[data-testid*="graph"]',
+    '[data-testid*="chart"]',
+    '[class*="figure"]',
+    '[class*="image"]',
+    '[class*="illustration"]',
+    '[class*="diagram"]',
+    '[class*="media"]'
+  ];
+
+  for (const selector of figureSelectors) {
+    const elements = deepQuerySelectorAll(selector, satRoot);
+    for (const el of elements) {
+      if (!isElementVisible(el)) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width >= MIN_SIZE && rect.height >= MIN_SIZE) {
+        if (!candidates.find(c => c.element === el)) {
+          candidates.push({ element: el, type: 'container', selector });
+        }
+      }
+    }
+  }
+
+  // 우선순위 2: img, svg, canvas (직접 이미지 요소, Shadow DOM 포함)
+  const imageSelectors = ['img', 'svg', 'canvas'];
+  for (const selector of imageSelectors) {
+    const elements = deepQuerySelectorAll(selector, satRoot);
+    for (const el of elements) {
+      if (!isElementVisible(el)) continue;
+      const rect = el.getBoundingClientRect();
+      // 너무 작은 요소 제외
+      if (rect.width >= MIN_SIZE && rect.height >= MIN_SIZE) {
+        // 선택지 영역이나 UI 버튼이 아닌지 확인
+        const parent = el.closest('[role="radio"], button, [class*="button"], [class*="icon"]');
+        if (parent && (parent.getBoundingClientRect().width < 100 || parent.getBoundingClientRect().height < 100)) {
+          continue; // 작은 버튼/아이콘 내부 이미지는 제외
+        }
+
+        if (!candidates.find(c => c.element === el)) {
+          candidates.push({ element: el, type: selector, selector });
+        }
+      }
+    }
+  }
+
+  // 디버그: 후보별 정보 출력
+  console.log(`[FIGURE] figure 후보 발견: ${candidates.length}개`);
+  candidates.forEach((candidate, idx) => {
+    const rect = candidate.element.getBoundingClientRect();
+    const tagName = candidate.element.tagName;
+    const className = candidate.element.className ? candidate.element.className.substring(0, 50) : '';
+    const src = candidate.element.src || candidate.element.getAttribute('src') || '';
+    console.log(`[FIGURE] 후보 ${idx + 1}: tagName=${tagName}, type=${candidate.type}, rect=(${rect.width.toFixed(0)}x${rect.height.toFixed(0)}), src=${src.substring(0, 50)}, className=${className}`);
+  });
+
+  return candidates;
+}
+
+/**
+ * figure 요소를 이미지로 변환
+ * @param {HTMLElement} element
+ * @returns {Promise<{dataUrl: string, width: number, height: number} | null>}
+ */
+async function convertFigureToImage(element) {
+  const tagName = element.tagName.toLowerCase();
+
+  // A. <img> 요소
+  if (tagName === 'img') {
+    const result = await extractImageFromImg(element);
+    if (result) {
+      console.log(`[FIGURE] <img> 추출 성공: ${result.width}x${result.height}`);
+      return result;
+    }
+    // fetch 실패(CORS 등) 시 아래 E 단계 html2canvas 폴백으로 진행
+  }
+
+  // B. <canvas> 요소
+  if (tagName === 'canvas') {
+    const result = extractImageFromCanvas(element);
+    if (result) {
+      console.log(`[FIGURE] <canvas> 추출 성공: ${result.width}x${result.height}`);
+      return result;
+    }
+  }
+
+  // C. <svg> 요소
+  if (tagName === 'svg') {
+    const result = await extractImageFromSVG(element);
+    if (result) {
+      console.log(`[FIGURE] <svg> 추출 성공: ${result.width}x${result.height}`);
+      return result;
+    }
+  }
+
+  // D. background-image 확인
+  const bgResult = await extractImageFromBackground(element);
+  if (bgResult) {
+    console.log(`[FIGURE] background-image 추출 성공: ${bgResult.width}x${bgResult.height}`);
+    return bgResult;
+  }
+
+  // E. html2canvas 폴백 (복합 DOM)
+  console.log(`[FIGURE] html2canvas 폴백 시도: ${tagName}`);
+  const html2canvasResult = await extractImageWithHtml2Canvas(element);
+  if (html2canvasResult) {
+    console.log(`[FIGURE] html2canvas 추출 성공: ${html2canvasResult.width}x${html2canvasResult.height}`);
+    return html2canvasResult;
+  }
+
+  return null;
+}
+
+/**
+ * 문제에서 figure 이미지 추출
+ * @param {HTMLElement} satRoot
+ * @returns {Promise<Array<{dataUrl: string, width: number, height: number}>>}
+ */
+export async function extractFigures(satRoot) {
+  const figures = [];
+  let html2canvasCount = 0;
+
+  // #region agent log - DEBUG STEP 2: extractFigures 진입
+  console.log(`[DEBUG STEP 2] extractFigures 진입`);
+  fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:entry',message:'DEBUG STEP 2: extractFigures 진입',data:{satRootFound:!!satRoot},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
+
+  try {
+    // #region agent log - DEBUG STEP 2: 후보 탐색 전 기본 셀렉터 검증
+    const imgCount = satRoot.querySelectorAll('img').length;
+    const canvasCount = satRoot.querySelectorAll('canvas').length;
+    const svgCount = satRoot.querySelectorAll('svg').length;
+    const bgImageElements = Array.from(satRoot.querySelectorAll('*')).filter(el => {
+      try {
+        const style = window.getComputedStyle(el);
+        return style.backgroundImage && style.backgroundImage !== 'none';
+      } catch { return false; }
+    }).length;
+    console.log(`[DEBUG STEP 2] 기본 셀렉터 결과: img=${imgCount}, canvas=${canvasCount}, svg=${svgCount}, background-image=${bgImageElements}`);
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:beforeFindCandidates',message:'DEBUG STEP 2: 후보 탐색 전 기본 셀렉터 검증',data:{imgCount,canvasCount,svgCount,bgImageElements},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+
+    const candidates = findFigureCandidates(satRoot);
+
+    // #region agent log - DEBUG STEP 2: 후보 탐색 결과
+    console.log(`[DEBUG STEP 2] findFigureCandidates 결과: ${candidates.length}개 후보`);
+    const candidateDetails = candidates.map((c, idx) => {
+      const rect = c.element.getBoundingClientRect();
+      const style = window.getComputedStyle(c.element);
+      return {
+        idx: idx + 1,
+        tagName: c.element.tagName,
+        type: c.type,
+        width: rect.width,
+        height: rect.height,
+        minSizeFilter: rect.width >= 80 && rect.height >= 80,
+        backgroundImage: style.backgroundImage && style.backgroundImage !== 'none' ? style.backgroundImage.substring(0, 100) : null,
+        src: c.element.src || c.element.getAttribute('src') || ''
+      };
+    });
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:afterFindCandidates',message:'DEBUG STEP 2: 후보 탐색 결과',data:{candidatesCount:candidates.length,candidateDetails},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+
+    for (const candidate of candidates) {
+      try {
+        // #region agent log - DEBUG STEP 2: 각 후보 변환 시도
+        const rect = candidate.element.getBoundingClientRect();
+        console.log(`[DEBUG STEP 2] 후보 변환 시도: ${candidate.element.tagName}, ${rect.width}x${rect.height}`);
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:beforeConvert',message:'DEBUG STEP 2: 후보 변환 시도',data:{tagName:candidate.element.tagName,width:rect.width,height:rect.height,type:candidate.type},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+        
+        const imageData = await convertFigureToImage(candidate.element);
+        
+        // #region agent log - DEBUG STEP 2: 각 후보 변환 결과
+        console.log(`[DEBUG STEP 2] 후보 변환 결과: ${imageData ? '성공' : '실패'}`);
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:afterConvert',message:'DEBUG STEP 2: 후보 변환 결과',data:{tagName:candidate.element.tagName,success:!!imageData,imageData:imageData?{w:imageData.width,h:imageData.height,hasDataUrl:!!imageData.dataUrl}:null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+        
+        if (imageData) {
+          figures.push(imageData);
+          // html2canvas 사용 여부 카운트
+          if (candidate.type === 'container' || candidate.type === 'div' || candidate.type === 'span') {
+            html2canvasCount++;
+          }
+        }
+      } catch (error) {
+        console.warn(`[FIGURE] figure 변환 실패 (계속 진행):`, error);
+        // #region agent log - DEBUG STEP 2: 변환 오류
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:convertError',message:'DEBUG STEP 2: 후보 변환 오류',data:{tagName:candidate.element.tagName,errorMessage:error.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+        // 실패해도 계속 진행
+      }
+    }
+
+    // #region agent log - DEBUG STEP 2: extractFigures 완료
+    console.log(`[DEBUG STEP 2] extractFigures 완료: ${figures.length}개 figure 추출`);
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:complete',message:'DEBUG STEP 2: extractFigures 완료',data:{figuresLength:figures.length,html2canvasCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+
+    console.log(`[FIGURE] 총 ${figures.length}개 figure 추출 완료 (html2canvas 사용: ${html2canvasCount}개)`);
+  } catch (error) {
+    console.warn('[FIGURE] extractFigures 전체 오류 (빈 배열 반환):', error);
+    // #region agent log - DEBUG STEP 2: extractFigures 전체 오류
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:error',message:'DEBUG STEP 2: extractFigures 전체 오류',data:{errorMessage:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    // 전체 실패 시에도 빈 배열 반환 (플로우 중단 방지)
+  }
+
+  return figures;
+}
+
 // findSatRoot는 query.js로 이동됨 (순환 의존성 해결)
 // Re-export for backward compatibility
 export { findSatRoot } from './query.js';
+
+/**
+ * Module Start Screen 판별 (모듈 2 시작 전 전환 화면)
+ * - Progress UI 없음, 선택지 없음
+ * - "다음: Reading and Writing 모듈 2" 또는 "모듈 2 시작" 버튼
+ * @returns {boolean}
+ */
+export function isModuleStartScreen() {
+  const searchRoot = document.body;
+  const text = (searchRoot.innerText || searchRoot.textContent || '').trim();
+  const textLower = text.toLowerCase();
+
+  // (a) Visible button with text matching ["모듈 2 시작", "Module 2", "Start Module", "시작"]
+  const btnLabels = ['모듈 2 시작', 'Module 2', 'Start Module', '시작'];
+  const buttons = searchRoot.querySelectorAll('button, [role="button"], a, .mat-mdc-button, .mdc-button');
+  const hasModule2StartButton = Array.from(buttons).some(btn => {
+    const rect = btn.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    if (btn.disabled) return false;
+    const btnText = (btn.innerText || btn.textContent || '').trim();
+    return btnLabels.some(label => btnText.includes(label) || (btnText.includes('모듈 2') && btnText.includes('시작')));
+  });
+
+  // (b) Phrase "다음: Reading and Writing 모듈 2"
+  const hasNextModule2Phrase = text.includes('다음: Reading and Writing 모듈 2') ||
+    textLower.includes('reading and writing') && textLower.includes('모듈 2');
+
+  // (c) Progress absent AND choices absent (required - must NOT be question screen)
+  const progress = getProgressState();
+  const hasProgress = progress !== null && /\d+\s*\/\s*27/.test(progress);
+  const hasChoices = !!(searchRoot.querySelector('[role="radio"]') || searchRoot.querySelector('button[aria-label*="Choice"]'));
+  const noProgressNoChoices = !hasProgress && !hasChoices;
+
+  // Must NOT be question screen; must match (a) or (b)
+  const result = noProgressNoChoices &&
+    (hasModule2StartButton || hasNextModule2Phrase);
+
+  if (result) {
+    console.log('[SAT PDF Exporter] Module Start Screen 감지됨:', { hasModule2StartButton, hasNextModule2Phrase });
+  }
+  return result;
+}
 
 // 문제 화면 판별 (핵심: 문제 화면이 아닐 때는 추출 금지) - 개선
 export function isQuestionScreen() {
@@ -20,11 +515,11 @@ export function isQuestionScreen() {
   
   // 방법 2: 문제 번호 확인
   const problemNum = getCurrentProblemNumber();
-  const hasProblemNumber = problemNum > 0 && problemNum <= 27;
+  const hasProblemNumber = problemNum > 0 && (problemNum <= 27 || problemNum <= 22);
   
-  // 방법 3: Progress 표시 확인
+  // 방법 3: Progress 표시 확인 (Reading 27, Math 22)
   const progress = getProgressState();
-  const hasProgress = progress !== null && progress.includes('/27');
+  const hasProgress = progress !== null && (progress.includes('/27') || progress.includes('/22'));
   
   // 방법 4: 문제 텍스트 패턴 확인
   const bodyText = (document.body.innerText || '').toLowerCase();
@@ -34,9 +529,16 @@ export function isQuestionScreen() {
                              bodyText.includes('문제') ||
                              /^\d+\./.test(bodyText);
   
-  const result = hasChoices || (hasProblemNumber && hasProgress) || hasQuestionPattern;
+  // 방법 5: Math 주관식 - 입력창이 있으면 문제 화면
+  const hasSubjectiveInput = !!document.querySelector('input[placeholder*="입력"], input[placeholder*="여기에"], input[placeholder*="Enter"], textarea[placeholder*="입력"]');
   
-  console.log(`[SAT PDF Exporter] 문제 화면 판별: choices=${hasChoices}, problemNum=${problemNum}, progress=${progress}, pattern=${hasQuestionPattern} → ${result}`);
+  const result = hasChoices || (hasProblemNumber && hasProgress) || hasQuestionPattern || hasSubjectiveInput;
+  
+  console.log(`[SAT PDF Exporter] 문제 화면 판별: choices=${hasChoices}, problemNum=${problemNum}, progress=${progress}, pattern=${hasQuestionPattern}, subjectiveInput=${hasSubjectiveInput} → ${result}`);
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:isQuestionScreen',message:'isQuestionScreen result',data:{hasChoices,problemNum,hasProblemNumber,progress,hasProgress,hasQuestionPattern,result,bodyTextPreview:bodyText.substring(0,100)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
   
   return result;
 }
@@ -447,25 +949,36 @@ export function extractChoices(container) {
     }
   }
   
-  // 최종 폴백: 순수 텍스트 기반 추출
+  // 최종 폴백: 순수 텍스트 기반 추출 (element 포함 - 클릭 가능하도록)
   if (choices.length === 0) {
     console.warn('[SAT PDF Exporter] 모든 방법으로 선택지를 찾지 못함 - 순수 텍스트 기반 폴백 시도');
-    const text = container.innerText || '';
-    const choicePattern = /^([A-D])[\.\)]\s*([^\n]+)/gm;
-    let match;
-    const textChoices = [];
-    while ((match = choicePattern.exec(text)) !== null && textChoices.length < 4) {
-      const label = match[1];
-      if (label >= 'A' && label <= 'D') {
-        textChoices.push({
-          label: label,
-          text: match[2].trim()
-        });
-      }
+    const allElements = Array.from(container.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter(el => {
+      try {
+        const r = el.getBoundingClientRect();
+        return r.width >= 20 && r.height >= 20 && r.bottom >= 0 && r.top <= window.innerHeight;
+      } catch { return false; }
+    });
+    // 작은 요소부터 시도 (가장 구체적인 선택지)
+    allElements.sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height));
+    const seenLabels = new Set();
+    for (const el of allElements) {
+      const text = (el.innerText || el.textContent || '').trim();
+      const m = text.match(/^([A-D])[\.\)]\s*([\s\S]+)$/);
+      if (!m || m[1] < 'A' || m[1] > 'D' || seenLabels.has(m[1]) || text.length > 500) continue;
+      if (/[B-D][\.\)]/g.test(text.replace(m[0], ''))) continue;
+      seenLabels.add(m[1]);
+      choices.push({
+        label: m[1],
+        text: m[2].trim().substring(0, 100),
+        element: el,
+        priority: 5,
+        source: '텍스트 기반 폴백'
+      });
+      console.log(`[SAT-DEBUG] [extractChoices] 텍스트 기반 후보 발견: ${m[1]} - ${m[2].trim().substring(0, 30)}`);
+      if (choices.length >= 4) break;
     }
-    if (textChoices.length >= 2) {
-      console.log(`[SAT-DEBUG] [extractChoices] 텍스트 기반 추출 성공: ${textChoices.length}개`);
-      return textChoices;
+    if (choices.length >= 2) {
+      console.log(`[SAT-DEBUG] [extractChoices] 텍스트 기반 추출 성공: ${choices.length}개 (element 포함)`);
     }
   }
 
@@ -491,7 +1004,7 @@ export async function extractCurrentProblem(sectionType) {
       });
     });
   });
-  await new Promise(resolve => setTimeout(resolve, 300)); // 300ms 추가 대기
+  await new Promise(resolve => setTimeout(resolve, 150)); // DOM 반영 대기
   // ============================================================================
   
   // ============================================================================
@@ -652,6 +1165,55 @@ export async function extractCurrentProblem(sectionType) {
     problemText = '[QUESTION_NOT_EXTRACTED]';
   }
   
+  // ============================================================================
+  // Figure 이미지 추출
+  // ============================================================================
+  // #region agent log - DEBUG STEP 1: extractFigures 호출 확인
+  console.log(`[DEBUG STEP 1] extractCurrentProblem: 문제 ${problemNum}에서 extractFigures 호출 직전`);
+  fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:beforeExtractFigures',message:'DEBUG STEP 1: extractFigures 호출 직전',data:{problemNum,sectionType},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+  
+  let figures = [];
+  try {
+    const satRoot = findSatRoot();
+    // #region agent log - DEBUG STEP 1: satRoot 확인
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:satRootCheck',message:'DEBUG STEP 1: satRoot 확인',data:{problemNum,satRootFound:!!satRoot},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    
+    if (satRoot) {
+      // #region agent log - DEBUG STEP 1: extractFigures 호출
+      console.log(`[DEBUG STEP 1] extractFigures 호출 시작: 문제 ${problemNum}`);
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresCall',message:'DEBUG STEP 1: extractFigures 호출',data:{problemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      
+      figures = await extractFigures(satRoot);
+      
+      // #region agent log - DEBUG STEP 1: extractFigures 결과
+      console.log(`[DEBUG STEP 1] extractFigures 완료: 문제 ${problemNum}, figures.length=${figures.length}`);
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresResult',message:'DEBUG STEP 1: extractFigures 결과',data:{problemNum,figuresLength:figures.length,figures:figures.map(f=>({w:f.width,h:f.height,dataUrlLength:f.dataUrl?f.dataUrl.length:0}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      
+      console.log(`[SAT-DEBUG] [extractCurrentProblem] 문제 ${problemNum}에서 ${figures.length}개 figure 추출 완료`);
+    } else {
+      console.warn('[SAT-DEBUG] [extractCurrentProblem] satRoot를 찾을 수 없어 figure 추출 스킵');
+      // #region agent log - DEBUG STEP 1: satRoot 없음
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:satRootNotFound',message:'DEBUG STEP 1: satRoot 없음',data:{problemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+    }
+  } catch (error) {
+    console.warn('[SAT-DEBUG] [extractCurrentProblem] figure 추출 오류 (계속 진행):', error);
+    // #region agent log - DEBUG STEP 1: extractFigures 오류
+    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresError',message:'DEBUG STEP 1: extractFigures 오류',data:{problemNum,errorMessage:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    figures = []; // 실패 시 빈 배열
+  }
+  
+  // #region agent log - DEBUG STEP 3: extractCurrentProblem 반환 직전 figures 검증
+  console.log(`[DEBUG STEP 3] extractCurrentProblem 반환 직전: 문제 ${problemNum}, figures.length=${figures.length}`);
+  fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:beforeReturn',message:'DEBUG STEP 3: extractCurrentProblem 반환 직전 figures 검증',data:{problemNum,figuresLength:figures.length,figures:figures.map(f=>({w:f.width,h:f.height,hasDataUrl:!!f.dataUrl}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
+  // ============================================================================
+  
   // 고정된 데이터 구조 반환 (사용자 요구사항에 맞춤)
   return {
     section: sectionType === 'reading' ? 'Reading and Writing' : 'Math',
@@ -661,7 +1223,8 @@ export async function extractCurrentProblem(sectionType) {
     question: problemText, // stem 대신 question 사용 (비어있으면 placeholder)
     choices: choices, // {A: \"...\", B: \"...\", C: \"...\", D: \"...\"} 형태
     correctAnswer: '', // 나중에 채워짐 (detectCorrectAnswer에서)
-    explanation: '' // 나중에 채워짐 (extractExplanationAfterGrading에서)
+    explanation: '', // 나중에 채워짐 (extractExplanationAfterGrading에서)
+    figures: figures // figure 이미지 배열
   };
 }
 
@@ -703,7 +1266,7 @@ export function getProgressState() {
     const current = parseInt(parts[0]);
     const total = parseInt(parts[1]);
     
-    if (current > 0 && current <= total && total === 27) {
+    if (current > 0 && current <= total && (total === 27 || total === 22)) {
       console.log(`[SAT PDF Exporter] Progress 발견 (satRoot text regex): ${mostCommon}`);
       console.log(`[DIAG] progress text raw: "${satRootText.slice(0, 200)}"`);
       return mostCommon;
@@ -719,7 +1282,7 @@ export function getProgressState() {
     if (match) {
       const current = parseInt(match[1]);
       const total = parseInt(match[2]);
-      if (current > 0 && current <= total && total === 27) {
+      if (current > 0 && current <= total && (total === 27 || total === 22)) {
         console.log(`[SAT PDF Exporter] Progress 발견 (satRoot selector): ${match[0]}`);
         return match[0];
       }
@@ -755,12 +1318,16 @@ export function getCurrentProblemNumber() {
       if (!isElementVisible(el)) continue; // 보이지 않는 요소 제외
       
       const text = (el.innerText || el.textContent || '').trim();
-      // SAT는 27 고정이므로 /\b(\d+)\s*\/\s*27\b/만 허용
-      const match = text.match(/\b(\d+)\s*\/\s*27\b/);
+      // Reading 27문제, Math 22문제 지원
+      const match = text.match(/\b(\d+)\s*\/\s*(27|22)\b/);
       if (match) {
         const num = parseInt(match[1]);
-        if (num > 0 && num <= 27) {
+        const total = parseInt(match[2]);
+        if (num > 0 && num <= total) {
           console.log(`[SAT PDF Exporter] 문제 번호 발견 (satRoot progress UI): ${num}/27 (raw: "${text}")`);
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:found1',message:'getCurrentProblemNumber found via progress UI',data:{num,text,method:'progressUI'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
           return num;
         }
       }
@@ -769,11 +1336,15 @@ export function getCurrentProblemNumber() {
   
   // 방법 2: satRoot 내부 텍스트에서 progress 패턴 찾기
   const satRootText = satRoot.innerText || satRoot.textContent || '';
-  const match = satRootText.match(/\b(\d+)\s*\/\s*27\b/);
+  const match = satRootText.match(/\b(\d+)\s*\/\s*(27|22)\b/);
   if (match) {
     const num = parseInt(match[1]);
-    if (num > 0 && num <= 27) {
+    const total = parseInt(match[2]);
+    if (num > 0 && num <= total) {
       console.log(`[SAT PDF Exporter] 문제 번호 발견 (satRoot text): ${num}/27`);
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:found2',message:'getCurrentProblemNumber found via satRoot text',data:{num,method:'satRootText'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
       return num;
     }
   }
@@ -788,13 +1359,22 @@ export function getCurrentProblemNumber() {
       const num = parseInt(numMatch[1]);
       if (num > 0 && num <= 27) {
         console.log(`[SAT PDF Exporter] 문제 번호 발견 (satRoot 텍스트 패턴): ${num}`);
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:found3',message:'getCurrentProblemNumber found via text pattern',data:{num,text,method:'textPattern'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
         return num;
       }
     }
   }
   
   console.warn('[SAT PDF Exporter] 문제 번호를 찾을 수 없습니다. 기본값 1 사용');
-  return 1; // 기본값
+  
+  // #region agent log
+  const defaultReturn = 1;
+  fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:default',message:'getCurrentProblemNumber returning default 1',data:{satRootFound:!!satRoot,defaultReturn},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+  // #endregion
+  
+  return defaultReturn; // 기본값
 }
 
 /**
@@ -918,9 +1498,9 @@ export function isGraded() {
  * 채점 완료 대기 (더 엄격한 조건: 정답 표시가 실제로 나타날 때까지 대기)
  * @returns {Promise<string|null>} 'correct' | 'incorrect' | null
  */
-export async function waitForGrading() {
+export async function waitForGrading(timeoutMs = 6000) {
   console.log('[GRADING] 채점 대기 시작 (엄격한 조건: 정답 표시 확인)');
-  const timeoutMs = 6000; // 6초 타임아웃 (증가)
+  // timeoutMs 파라미터로 받도록 수정 (기본값 6000ms)
   
   // SAT root container 찾기
   const satRoot = findSatRoot();
@@ -1071,8 +1651,8 @@ export async function waitForGrading() {
         return;
       }
       
-      // 80ms마다 재확인
-      setTimeout(checkGrading, 80);
+      // 20ms마다 재확인 (빠른 채점 감지)
+      setTimeout(checkGrading, 20);
     };
     
     // 즉시 첫 확인
@@ -1112,6 +1692,73 @@ export function detectCorrectAnswer() {
     }
     // #endregion
     return null;
+  }
+  
+  // ---------------------------------------------------------------------------
+  // Math 주관식: div.explanation → option-text-container → span.math-inline[data-math]
+  // 객관식 선택지가 없으므로 먼저 확인
+  // ---------------------------------------------------------------------------
+  const explanationBlocks = satRoot.querySelectorAll('.explanation[class*="answered"], [class*="explanation"]');
+  for (const block of explanationBlocks) {
+    if (!isElementVisible(block)) continue;
+    const optionTextContainer = block.querySelector('.option-text-container');
+    if (!optionTextContainer) continue;
+    // 1) LaTeX: span.math-inline[data-math]
+    const mathInline = optionTextContainer.querySelector('span.math-inline[data-math]');
+    if (mathInline) {
+      const latex = mathInline.getAttribute('data-math');
+      if (latex && typeof latex === 'string') {
+        let readable = latex
+          .replace(/\\frac\s*\{\s*([^}]+)\s*\}\s*\{\s*([^}]+)\s*\}/g, '$1/$2')
+          .replace(/\\sqrt\s*\{\s*([^}]+)\s*\}/g, '√$1')
+          .replace(/\\sqrt\s*([^\s\{\\]+)/g, '√$1')
+          .replace(/\\cdot/g, '·')
+          .replace(/\\times/g, '×')
+          .replace(/\\div/g, '÷')
+          .replace(/\\pm/g, '±')
+          .replace(/\\text\s*\{\s*([^}]*)\s*\}/g, '$1')
+          .replace(/\\left|\\right/g, '')
+          .replace(/\\\(|\\\)/g, '')
+          .trim();
+        if (readable.length > 0) {
+          console.log(`[SAT PDF Exporter] Math 주관식 정답 발견: ${readable} (LaTeX)`);
+          return readable;
+        }
+      }
+    }
+    // 2) 폴백: data-math 속성 있는 모든 요소 (katex 등 다른 래퍼)
+    const anyMath = optionTextContainer.querySelector('[data-math]');
+    if (anyMath) {
+      const latex = anyMath.getAttribute('data-math');
+      if (latex && typeof latex === 'string') {
+        let readable = latex
+          .replace(/\\frac\s*\{\s*([^}]+)\s*\}\s*\{\s*([^}]+)\s*\}/g, '$1/$2')
+          .replace(/\\sqrt\s*\{\s*([^}]+)\s*\}/g, '√$1')
+          .replace(/\\cdot/g, '·')
+          .replace(/\\times/g, '×')
+          .replace(/\\div/g, '÷')
+          .replace(/\\pm/g, '±')
+          .replace(/\\text\s*\{\s*([^}]*)\s*\}/g, '$1')
+          .replace(/\\left|\\right/g, '')
+          .trim();
+        if (readable.length > 0) {
+          console.log(`[SAT PDF Exporter] Math 주관식 정답 발견: ${readable} ([data-math])`);
+          return readable;
+        }
+      }
+    }
+    // 3) 폴백: 순수 텍스트 (숫자, 분수 등 - "8", "3/5", "1.5")
+    const rawText = (optionTextContainer.innerText || optionTextContainer.textContent || '').trim();
+    const cleaned = rawText
+      .replace(/^(정답|오답|Correct|Incorrect)\s*/i, '')
+      .replace(/\s*(정답|오답|Correct|Incorrect)$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const numericMatch = cleaned.match(/^[\d\s\/\.\-\(\)\*]+$/);
+    if (cleaned.length > 0 && cleaned.length <= 20 && (numericMatch || /^[\d\.]+\s*\/\s*[\d\.]+$/.test(cleaned))) {
+      console.log(`[SAT PDF Exporter] Math 주관식 정답 발견: ${cleaned} (텍스트 폴백)`);
+      return cleaned;
+    }
   }
   
   // 옵션 후보 수집 (더 robust한 selector)
@@ -1334,6 +1981,49 @@ export function detectCorrectAnswer() {
       }
     }
   }
+  // ---------------------------------------------------------------------------
+  // 폴백 4: 선택된(aria-checked=true) 옵션 사용
+  // - 일부 UI에서는 정답 옵션에 별도 correct 마킹 없이 aria-checked만 true로 유지되는 경우가 있음
+  // ---------------------------------------------------------------------------
+  try {
+    const selectedCandidates = optionCandidates.filter(c => {
+      try {
+        const ariaChecked = c.element.getAttribute('aria-checked') || '';
+        const ariaPressed = c.element.getAttribute('aria-pressed') || '';
+        return ariaChecked.toLowerCase() === 'true' || ariaPressed.toLowerCase() === 'true';
+      } catch {
+        return false;
+      }
+    });
+    if (selectedCandidates.length === 1) {
+      const sel = selectedCandidates[0];
+      console.log(`[SAT PDF Exporter] 정답 발견: ${sel.letter} (aria-checked/pressed=true 폴백)`);
+      // #region agent log
+      try {
+        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: 'extract.js:detectCorrectAnswer:ariaCheckedFallback',
+            message: 'correct answer inferred from aria-checked/pressed',
+            data: {
+              answer: sel.letter,
+              candidatesCount: optionCandidates.length
+            },
+            timestamp: Date.now(),
+            runId: 'answers-bug',
+            hypothesisId: 'H3'
+          })
+        }).catch(() => {});
+      } catch {
+        // 로깅 실패는 무시
+      }
+      // #endregion
+      return sel.letter;
+    }
+  } catch {
+    // 폴백 로직 실패는 무시
+  }
   
   // #region agent log
   if (typeof window !== 'undefined' && window.location) {
@@ -1422,6 +2112,40 @@ export function extractExplanationAfterGrading(correctAnswer = null, expectedPro
   const satRootProblemNum = getCurrentProblemNumber();
   fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractExplanationAfterGrading:satRootFound',message:'satRoot found, checking problem number',data:{satRootProgress,satRootProblemNum,currentProblemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
   // #endregion
+  
+  // ---------------------------------------------------------------------------
+  // Math 주관식: correctAnswer가 없을 때 (A-D 선택지 없음) explanation-text에서 직접 추출
+  // ---------------------------------------------------------------------------
+  if (!correctAnswer) {
+    const explanationTextContainers = satRoot.querySelectorAll(
+      '.explanation-text, [class*="explanation-text"]'
+    );
+    for (const container of explanationTextContainers) {
+      if (!isElementVisible(container)) continue;
+      const msgContent = container.querySelector('message-content, [id*="rationale"], .markdown');
+      const el = msgContent || container;
+      const text = (el.innerText || el.textContent || '').trim();
+      if (text.length > 10) {
+        const cleaned = text.replace(/\s+/g, ' ').trim();
+        console.log(`[SAT PDF Exporter] Math 주관식 해설 발견 (explanation-text): ${cleaned.substring(0, 50)}...`);
+        return cleaned;
+      }
+    }
+    // option-text-container가 있는 explanation 블록 내부에서 rationale 영역 찾기
+    const explanationBlocks = satRoot.querySelectorAll('.explanation[class*="answered"], [class*="explanation"]');
+    for (const block of explanationBlocks) {
+      const optionText = block.querySelector('.option-text-container');
+      if (!optionText) continue;
+      const rationale = block.querySelector('[id*="rationale"], .explanation-text, [class*="explanation-text"]');
+      if (!rationale) continue;
+      const text = (rationale.innerText || rationale.textContent || '').trim();
+      if (text.length > 10) {
+        const cleaned = text.replace(/\s+/g, ' ').trim();
+        console.log(`[SAT PDF Exporter] Math 주관식 해설 발견 (explanation 블록): ${cleaned.substring(0, 50)}...`);
+        return cleaned;
+      }
+    }
+  }
   
   // 정답 옵션 요소 찾기 (정답이 제공된 경우)
   let correctOptionElement = null;
@@ -1993,7 +2717,7 @@ export async function waitForAnswerUIWithNextButtonCheck() {
   const maxAttempts = 40; // 최대 8초 대기
   
   while (attempts < maxAttempts) {
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise(resolve => setTimeout(resolve, 100));
     
     // 초록 박스 찾기
     const greenBoxes = document.querySelectorAll('*');
@@ -2041,7 +2765,7 @@ export async function waitForAnswerUIWithNextButtonCheck() {
             console.log('[SAT PDF Exporter] 정답은 발견했지만 next 버튼이 비활성화됨. 활성화 대기...');
             let buttonWaitAttempts = 0;
             while (buttonWaitAttempts < 10 && nextButton.disabled) {
-              await new Promise(resolve => setTimeout(resolve, 200));
+              await new Promise(resolve => setTimeout(resolve, 100));
               buttonWaitAttempts++;
             }
             if (!nextButton.disabled) {
