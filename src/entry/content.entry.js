@@ -427,7 +427,8 @@ export class SATApp {
         
         // Worker 프레임에 작업 시작 명령 전송
         console.log('[FRAME] SAT_START sent', { workerHref: worker.href, top: window === window.top });
-        window.postMessage({ type: 'SAT_START', workerHref: worker.href }, '*');
+        // location.origin 사용: '*' 사용 시 구글 개인정보/계정 선택 iframe이 메시지를 받아 탭이 열림
+        window.postMessage({ type: 'SAT_START', workerHref: worker.href }, location.origin);
         
         // Worker 프레임에서 수집 완료 메시지 대기
         allData = await new Promise((resolve, reject) => {

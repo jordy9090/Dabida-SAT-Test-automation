@@ -281,18 +281,28 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       console.log(`[FLOW] 선지 클릭 전 대기 ${beforeMs}ms${hasImage ? ' (이미지 있음)' : ''}...`);
       await new Promise(resolve => setTimeout(resolve, beforeMs));
 
-      // 선택지 클릭 (A)
-      console.log(`[FLOW] 선택지 클릭 중...`);
-      const clicked = await clickFirstChoice(sectionType);
+      // 선택지 클릭 (A) - 실패 시 재시도 후에도 실패하면 제출하지 않고 같은 문제 재시도
+      const maxChoiceClickRetries = 3;
+      const choiceRetryDelayMs = 400;
+      let clicked = await clickFirstChoice(sectionType);
       if (!clicked) {
-        console.warn(`[FLOW] 선택지 클릭 실패. 다음 문제로 이동 시도.`);
-      } else {
-        console.log(`[FLOW] ✓ 선택지 클릭 성공`);
-        // 선지 클릭 후 제출 전 대기 (다음 선지 구간이 너무 빨리 지나가지 않도록)
-        const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
-        console.log(`[FLOW] 선지 클릭 후 제출 전 대기 ${afterMs}ms${hasImage ? ' (이미지 있음)' : ''}...`);
-        await new Promise(resolve => setTimeout(resolve, afterMs));
+        for (let retry = 1; retry <= maxChoiceClickRetries; retry++) {
+          console.log(`[FLOW] 선택지 클릭 실패. 재시도 ${retry}/${maxChoiceClickRetries} (${choiceRetryDelayMs}ms 후)...`);
+          await new Promise(resolve => setTimeout(resolve, choiceRetryDelayMs));
+          clicked = await clickFirstChoice(sectionType);
+          if (clicked) break;
+        }
       }
+      if (!clicked) {
+        console.warn(`[FLOW] 선택지 클릭 최종 실패. 제출하지 않고 같은 문제 다시 시도합니다.`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+      console.log(`[FLOW] ✓ 선택지 클릭 성공`);
+      // 선지 클릭 후 제출 전 대기 (다음 선지 구간이 너무 빨리 지나가지 않도록)
+      const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
+      console.log(`[FLOW] 선지 클릭 후 제출 전 대기 ${afterMs}ms${hasImage ? ' (이미지 있음)' : ''}...`);
+      await new Promise(resolve => setTimeout(resolve, afterMs));
 
       // BUG FIX: 27번 문제는 제출 전에 정답 추출 (선택지 클릭 시 즉시 채점됨)
       if (isLastProblem && clicked) {
@@ -305,7 +315,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         }
       }
       
-      // 제출
+      // 제출 (선택지 클릭이 성공한 경우에만)
       console.log(`[FLOW] 제출 버튼 클릭 중...`);
       // BUG FIX: 27번은 확인 버튼 클릭 직후(화면 전환 전)에 정답을 캡처하도록 콜백 전달
       const onAfterConfirm = isLastProblem ? async () => {
@@ -450,6 +460,10 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:beforeExtractCurrentProblem',message:'math image extract debug: before extract',data:{sectionType,currentProblemNum,isLastProblem},timestamp:Date.now(),hypothesisId:'H5'})}).catch(()=>{});
       // #endregion
       problem = await extractCurrentProblem(sectionType);
+      // 추출 직후 DOM/렌더링 안정화 대기 (다음 문제로 넘어가기 전에 추출이 완전히 반영되도록)
+      if (problem) {
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
       // #region agent log
       fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:afterExtractCurrentProblem',message:'math image extract debug: after extract',data:{sectionType,currentProblemNum,problemNull:problem===null,figuresLength:problem?.figures?.length??'n/a'},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
       // #endregion

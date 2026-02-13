@@ -122,39 +122,53 @@ export function setupFrameMessageListener() {
     if (!msg || typeof msg !== 'object') return;
     
     // SAT_PROBE 수신: 문제 UI가 있는지 확인
+    // 주의: ev.source로만 응답 전송. '*' 사용 시 구글 개인정보/계정 선택 iframe이 메시지를 받아 탭이 열림
     if (msg.type === 'SAT_PROBE') {
       console.log(`[FRAME] probe received top? ${window === window.top} href: ${window.location.href}`);
       const ok = looksLikeSatQuestionUI();
       console.log(`[FRAME] probe result: ${ok ? 'looks like SAT UI' : 'not SAT UI'}`);
       
-      if (ok) {
+      if (ok && ev.source) {
         const bodyTextLen = (document.body?.innerText || '').length;
         const buttons = document.querySelectorAll('button, [role="button"]').length;
-        
-        window.postMessage({
-          type: 'SAT_PROBE_RESULT',
-          probeId: msg.probeId,
-          ok: true,
-          href: window.location.href,
-          title: document.title,
-          isTop: window === window.top,
-          bodyTextLen: bodyTextLen,
-          buttons: buttons
-        }, '*');
-        console.log(`[FRAME] probe result sent (ok=true, bodyTextLen=${bodyTextLen}, buttons=${buttons})`);
-      } else {
+        const targetOrigin = ev.origin || location.origin;
+        try {
+          ev.source.postMessage({
+            type: 'SAT_PROBE_RESULT',
+            probeId: msg.probeId,
+            ok: true,
+            href: window.location.href,
+            title: document.title,
+            isTop: window === window.top,
+            bodyTextLen: bodyTextLen,
+            buttons: buttons
+          }, targetOrigin);
+          console.log(`[FRAME] probe result sent (ok=true, bodyTextLen=${bodyTextLen}, buttons=${buttons})`);
+        } catch (e) {
+          console.warn('[FRAME] probe result postMessage 실패 (ev.source로 전송):', e);
+        }
+      } else if (!ok) {
         console.log(`[FRAME] probe result: not SAT UI, skipping response`);
       }
       return;
     }
     
     // SAT_START 수신: worker 프레임에서만 작업 시작
+    // 주의: 결과는 ev.source로만 전송. '*' 사용 시 구글 개인정보/계정 선택 iframe이 메시지를 받아 탭이 열림
     if (msg.type === 'SAT_START') {
       console.log(`[FRAME] SAT_START received top? ${window === window.top} href: ${window.location.href}`);
       if (!looksLikeSatQuestionUI()) {
         console.log('[FRAME] SAT_START ignored: not SAT UI');
         return;
       }
+      
+      if (!ev.source) {
+        console.warn('[FRAME] SAT_START ev.source 없음 - 결과 전송 불가');
+        return;
+      }
+      
+      const replyTarget = ev.source;
+      const replyOrigin = ev.origin || location.origin;
       
       console.log('[FRAME] SAT_START received (worker frame)');
       
@@ -195,20 +209,28 @@ export function setupFrameMessageListener() {
             math: allData.math.length
           });
           
-          // 결과를 top frame에 전송
-          window.postMessage({
-            type: 'SAT_COLLECTION_COMPLETE',
-            data: allData,
-            href: window.location.href
-          }, '*');
+          // 결과를 요청자(top frame)에만 전송 (다른 origin iframe에 전달되지 않도록)
+          try {
+            replyTarget.postMessage({
+              type: 'SAT_COLLECTION_COMPLETE',
+              data: allData,
+              href: window.location.href
+            }, replyOrigin);
+          } catch (e) {
+            console.warn('[SAT WORKER] SAT_COLLECTION_COMPLETE postMessage 실패:', e);
+          }
           
         } catch (error) {
           console.error('[SAT WORKER] 수집 오류:', error);
-          window.postMessage({
-            type: 'SAT_COLLECTION_ERROR',
-            error: error.message,
-            href: window.location.href
-          }, '*');
+          try {
+            replyTarget.postMessage({
+              type: 'SAT_COLLECTION_ERROR',
+              error: error.message,
+              href: window.location.href
+            }, replyOrigin);
+          } catch (e) {
+            console.warn('[SAT WORKER] SAT_COLLECTION_ERROR postMessage 실패:', e);
+          }
         }
       })();
       
