@@ -3,8 +3,9 @@ node_modules/
 package-lock.json
 
 # Build outputs
-dist/
-*.map
+dist/*
+!dist/content.js
+!dist/content.js.map
 
 # OS files
 .DS_Store
