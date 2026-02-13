@@ -461,12 +461,11 @@ function addAnswersSectionToPDF(doc, sectionName, problems, startY, maxWidth, ma
     }
 
     // 해설
-    if (problem.explanation) {
-      yPosition += lineHeight * 0.5;
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'normal'); // 폰트 명시적으로 설정 (한글 깨짐 방지)
-      doc.setTextColor(80, 80, 80);
-      // 한글/영문 혼합 텍스트 처리: splitTextToSize가 한글을 올바르게 처리하도록
+    yPosition += lineHeight * 0.5;
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80, 80, 80);
+    if (problem.explanation && problem.explanation.trim().length > 0) {
       const explanationText = `Explanation: ${problem.explanation}`;
       const explanationLines = doc.splitTextToSize(explanationText, maxWidth);
       explanationLines.forEach(line => {
@@ -474,15 +473,20 @@ function addAnswersSectionToPDF(doc, sectionName, problems, startY, maxWidth, ma
           doc.addPage();
           yPosition = margin;
           doc.setTextColor(80, 80, 80);
-          doc.setFont('helvetica', 'normal'); // 페이지 추가 시 폰트 재설정
+          doc.setFont('helvetica', 'normal');
         }
         doc.text(line, margin, yPosition);
         yPosition += lineHeight;
       });
-      doc.setTextColor(0, 0, 0);
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal'); // 폰트 재설정
+    } else {
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(128, 128, 128);
+      doc.text('Explanation: [NOT_EXTRACTED]', margin, yPosition);
+      yPosition += lineHeight;
     }
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
 
     yPosition += sectionSpacing;
   });

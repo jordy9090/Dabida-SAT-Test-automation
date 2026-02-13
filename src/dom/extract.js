@@ -390,6 +390,9 @@ export async function extractFigures(satRoot) {
 
     const candidates = findFigureCandidates(satRoot);
 
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:afterFindCandidates',message:'math image extract: candidates count',data:{imgCount,canvasCount,svgCount,candidatesCount:candidates.length},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     // #region agent log - DEBUG STEP 2: 후보 탐색 결과
     console.log(`[DEBUG STEP 2] findFigureCandidates 결과: ${candidates.length}개 후보`);
     const candidateDetails = candidates.map((c, idx) => {
@@ -440,10 +443,10 @@ export async function extractFigures(satRoot) {
       }
     }
 
-    // #region agent log - DEBUG STEP 2: extractFigures 완료
-    console.log(`[DEBUG STEP 2] extractFigures 완료: ${figures.length}개 figure 추출`);
-    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:complete',message:'DEBUG STEP 2: extractFigures 완료',data:{figuresLength:figures.length,html2canvasCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractFigures:complete',message:'math image extract: figures result',data:{figuresLength:figures.length,html2canvasCount,candidatesCount:candidates.length},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
     // #endregion
+    console.log(`[DEBUG STEP 2] extractFigures 완료: ${figures.length}개 figure 추출`);
 
     console.log(`[FIGURE] 총 ${figures.length}개 figure 추출 완료 (html2canvas 사용: ${html2canvasCount}개)`);
   } catch (error) {
@@ -991,6 +994,9 @@ export async function extractCurrentProblem(sectionType) {
   // FRAME GUARD: DOM 작업은 worker frame에서만 실행
   if (window !== window.top && !window.__SAT_IS_WORKER) {
     console.warn('[SAT-DEBUG] [extractCurrentProblem] Worker frame이 아닌 iframe에서 실행 시도 - 스킵');
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:frameGuard',message:'math image extract: return null (frame guard)',data:{sectionType},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     return null;
   }
   
@@ -1176,34 +1182,33 @@ export async function extractCurrentProblem(sectionType) {
   let figures = [];
   try {
     const satRoot = findSatRoot();
-    // #region agent log - DEBUG STEP 1: satRoot 확인
-    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:satRootCheck',message:'DEBUG STEP 1: satRoot 확인',data:{problemNum,satRootFound:!!satRoot},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    const satRootTag = satRoot ? satRoot.tagName : null;
+    const satRootIsBody = satRoot === document.body;
+    const imgInRoot = satRoot ? satRoot.querySelectorAll('img').length : 0;
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:satRootCheck',message:'math image extract: satRoot before extractFigures',data:{sectionType,problemNum,satRootFound:!!satRoot,satRootTag,satRootIsBody,imgInRoot},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
     // #endregion
-    
+
     if (satRoot) {
-      // #region agent log - DEBUG STEP 1: extractFigures 호출
       console.log(`[DEBUG STEP 1] extractFigures 호출 시작: 문제 ${problemNum}`);
-      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresCall',message:'DEBUG STEP 1: extractFigures 호출',data:{problemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
-      
       figures = await extractFigures(satRoot);
-      
-      // #region agent log - DEBUG STEP 1: extractFigures 결과
+
       console.log(`[DEBUG STEP 1] extractFigures 완료: 문제 ${problemNum}, figures.length=${figures.length}`);
-      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresResult',message:'DEBUG STEP 1: extractFigures 결과',data:{problemNum,figuresLength:figures.length,figures:figures.map(f=>({w:f.width,h:f.height,dataUrlLength:f.dataUrl?f.dataUrl.length:0}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #region agent log
+      fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresResult',message:'math image extract: after extractFigures',data:{sectionType,problemNum,figuresLength:figures.length},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
       // #endregion
-      
+
       console.log(`[SAT-DEBUG] [extractCurrentProblem] 문제 ${problemNum}에서 ${figures.length}개 figure 추출 완료`);
     } else {
       console.warn('[SAT-DEBUG] [extractCurrentProblem] satRoot를 찾을 수 없어 figure 추출 스킵');
-      // #region agent log - DEBUG STEP 1: satRoot 없음
-      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:satRootNotFound',message:'DEBUG STEP 1: satRoot 없음',data:{problemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #region agent log
+      fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:satRootNotFound',message:'math image extract: satRoot null',data:{sectionType,problemNum},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
       // #endregion
     }
   } catch (error) {
     console.warn('[SAT-DEBUG] [extractCurrentProblem] figure 추출 오류 (계속 진행):', error);
-    // #region agent log - DEBUG STEP 1: extractFigures 오류
-    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresError',message:'DEBUG STEP 1: extractFigures 오류',data:{problemNum,errorMessage:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractCurrentProblem:extractFiguresError',message:'math image extract: extractFigures throw',data:{sectionType,problemNum,errorMessage:error.message},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
     // #endregion
     figures = []; // 실패 시 빈 배열
   }
@@ -2024,7 +2029,29 @@ export function detectCorrectAnswer() {
   } catch {
     // 폴백 로직 실패는 무시
   }
-  
+
+  // 폴백 5: 구조적 후보가 0일 때 텍스트 기반 옵션 탐색 (Reading Module 1 등 - role="radio" 없음)
+  if (optionCandidates.length === 0) {
+    const textOptionEls = Array.from(satRoot.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter(el => {
+      try {
+        const r = el.getBoundingClientRect();
+        return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot.contains(el);
+      } catch { return false; }
+    });
+    for (const el of textOptionEls) {
+      const text = (el.innerText || el.textContent || '').trim();
+      const m = text.match(/^([A-D])[\.\)]\s*/);
+      if (!m || text.length > 500) continue;
+      const letter = m[1];
+      const lower = text.toLowerCase();
+      if (lower.includes('정답입니다') || lower.includes('this is correct') || /\bcorrect\b/.test(lower) ||
+          (el.className && /\banswered-correct\b|\bcorrect\b/.test(String(el.className)))) {
+        console.log(`[SAT PDF Exporter] 정답 발견: ${letter} (텍스트 기반 폴백)`);
+        return letter;
+      }
+    }
+  }
+
   // #region agent log
   if (typeof window !== 'undefined' && window.location) {
     const logData = {
@@ -2223,12 +2250,34 @@ export function extractExplanationAfterGrading(correctAnswer = null, expectedPro
         }
       }
     }
-    
+
+    // 구조적 후보가 0일 때 텍스트 기반으로 정답 옵션 요소 탐색 (Reading 등)
+    if (!correctOptionElement && correctAnswer) {
+      const textOptionEls = Array.from(satRoot.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter(el => {
+        try {
+          const r = el.getBoundingClientRect();
+          return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot.contains(el);
+        } catch { return false; }
+      });
+      for (const el of textOptionEls) {
+        const text = (el.innerText || el.textContent || '').trim();
+        const m = text.match(/^([A-D])[\.\)]\s*/);
+        if (!m || m[1] !== correctAnswer) continue;
+        const lower = text.toLowerCase();
+        if (lower.includes('정답입니다') || lower.includes('this is correct') || /\bcorrect\b/.test(lower) ||
+            (el.className && /\banswered-correct\b|\bcorrect\b/.test(String(el.className)))) {
+          correctOptionElement = el;
+          console.log(`[SAT PDF Exporter] 정답 옵션 요소 발견 (텍스트 기반 폴백): ${correctAnswer}`);
+          break;
+        }
+      }
+    }
+
     if (!correctOptionElement) {
       console.warn(`[SAT PDF Exporter] 정답 옵션 요소를 찾지 못함 (정답: ${correctAnswer}, 후보: ${candidates.length}개)`);
     }
   }
-  
+
   // 정답 옵션 요소가 있으면 그 요소 내부/하단에서만 explanation 찾기
   if (correctOptionElement) {
     const explanationSelectors = [
@@ -2309,11 +2358,11 @@ export function extractExplanationAfterGrading(correctAnswer = null, expectedPro
       if (!isElementVisible(element)) continue;
       const text = (element.innerText || element.textContent || '').trim();
       const textLower = text.toLowerCase();
-      
-      // "정답" 또는 "정답입니다"가 포함되고, "오답"이 포함되지 않은 explanation만 추출
-      if (text.length > 10 && 
-          (textLower.includes('정답') || textLower.includes('correct')) &&
-          !textLower.includes('오답') && !textLower.includes('incorrect')) {
+      const isWrong = textLower.includes('오답') || textLower.includes('incorrect');
+      // 정답/해설: "정답"|"correct" 포함이거나, 충분히 긴 설명(오답 아님)이면 수락 (Reading 11·12 등 영어 해설 추출 보강)
+      const looksCorrect = textLower.includes('정답') || textLower.includes('correct');
+      const longEnoughToBeExplanation = text.length > 40;
+      if (text.length > 10 && !isWrong && (looksCorrect || longEnoughToBeExplanation)) {
         
         console.log(`[SAT PDF Exporter] 폴백: 해설 후보 발견 (${selector}): ${text.substring(0, 100)}...`);
         
