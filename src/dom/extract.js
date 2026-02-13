@@ -865,10 +865,20 @@ export function extractChoices(container) {
     console.log(`[SAT-DEBUG] [extractChoices] 첫 5개 후보:`, first5);
   }
   
-  // Priority 5: 텍스트 기반 폴백 - 클릭 가능한 요소 중 A/B/C/D 텍스트가 있는 것
+  // Priority 5: 텍스트 기반 폴백 - 클릭 가능한 요소 중 A/B/C/D 텍스트가 있는 것 (Shadow DOM 포함)
   if (candidates.length < 4) {
     console.log(`[SAT-DEBUG] [extractChoices] Priority 5 (텍스트 기반 폴백): 클릭 가능한 요소 탐색`);
-    const allClickable = Array.from(container.querySelectorAll('button, [role="button"], [tabindex], [data-testid], div[onclick], span[onclick]'));
+    const clickableSelectors = ['button', '[role="button"]', '[tabindex]', '[data-testid]', 'div[onclick]', 'span[onclick]', '[class*="choice"]', '[class*="option"]', '.mat-mdc-radio-button', '.mat-radio-button', '.mat-mdc-list-option'];
+    const allClickableSet = new Set();
+    for (const sel of clickableSelectors) {
+      try {
+        const nodes = deepQuerySelectorAll(sel, container);
+        nodes.forEach(el => allClickableSet.add(el));
+      } catch (e) {
+        // ignore
+      }
+    }
+    const allClickable = Array.from(allClickableSet);
     console.log(`[SAT-DEBUG] [extractChoices] 전체 클릭 가능 요소: ${allClickable.length}개`);
     
     const visibleClickable = allClickable.filter(el => {
@@ -952,10 +962,20 @@ export function extractChoices(container) {
     }
   }
   
-  // 최종 폴백: 순수 텍스트 기반 추출 (element 포함 - 클릭 가능하도록)
+  // 최종 폴백: 순수 텍스트 기반 추출 (Shadow DOM 포함, 패턴 완화)
   if (choices.length === 0) {
     console.warn('[SAT PDF Exporter] 모든 방법으로 선택지를 찾지 못함 - 순수 텍스트 기반 폴백 시도');
-    const allElements = Array.from(container.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter(el => {
+    const tagSelectors = ['div', 'span', 'p', 'li', 'button', 'label', 'td', '[role="button"]'];
+    const allElementsSet = new Set();
+    for (const sel of tagSelectors) {
+      try {
+        const nodes = deepQuerySelectorAll(sel, container);
+        nodes.forEach(el => allElementsSet.add(el));
+      } catch (e) {
+        // ignore
+      }
+    }
+    const allElements = Array.from(allElementsSet).filter(el => {
       try {
         const r = el.getBoundingClientRect();
         return r.width >= 20 && r.height >= 20 && r.bottom >= 0 && r.top <= window.innerHeight;
@@ -964,20 +984,37 @@ export function extractChoices(container) {
     // 작은 요소부터 시도 (가장 구체적인 선택지)
     allElements.sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height));
     const seenLabels = new Set();
+    const choicePatterns = [
+      /^\s*([A-D])[\.\)]\s*([\s\S]+)$/,           // "A. text" or "A) text" (leading space ok)
+      /^\s*\(([A-D])\)\s*([\s\S]+)$/,             // "(A) text"
+      /^([A-D])\s*[\.\)]\s*([\s\S]+)$/            // "A ." or "A )"
+    ];
+    const lineChoiceRe = /^\s*([A-D])[\.\)]\s*(.*)$/;
     for (const el of allElements) {
-      const text = (el.innerText || el.textContent || '').trim();
-      const m = text.match(/^([A-D])[\.\)]\s*([\s\S]+)$/);
-      if (!m || m[1] < 'A' || m[1] > 'D' || seenLabels.has(m[1]) || text.length > 500) continue;
-      if (/[B-D][\.\)]/g.test(text.replace(m[0], ''))) continue;
+      const rawText = (el.innerText || el.textContent || '').trim();
+      if (!rawText || rawText.length > 600) continue;
+      let m = null;
+      for (const pattern of choicePatterns) {
+        m = rawText.match(pattern);
+        if (m) break;
+      }
+      if (!m && rawText.includes('\n')) {
+        const firstLine = rawText.split('\n')[0];
+        const lineMatch = firstLine.match(lineChoiceRe);
+        if (lineMatch) m = [rawText, lineMatch[1], rawText.slice(firstLine.length).trim() || lineMatch[2]];
+      }
+      if (!m || m[1] < 'A' || m[1] > 'D' || seenLabels.has(m[1])) continue;
+      const rest = (m[2] || '').trim();
+      if (/[B-D][\.\)]/.test(rest)) continue;
       seenLabels.add(m[1]);
       choices.push({
         label: m[1],
-        text: m[2].trim().substring(0, 100),
+        text: rest.substring(0, 100),
         element: el,
         priority: 5,
         source: '텍스트 기반 폴백'
       });
-      console.log(`[SAT-DEBUG] [extractChoices] 텍스트 기반 후보 발견: ${m[1]} - ${m[2].trim().substring(0, 30)}`);
+      console.log(`[SAT-DEBUG] [extractChoices] 텍스트 기반 후보 발견: ${m[1]} - ${rest.substring(0, 30)}`);
       if (choices.length >= 4) break;
     }
     if (choices.length >= 2) {

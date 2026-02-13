@@ -8870,7 +8870,16 @@
     }
     if (candidates.length < 4) {
       console.log(`[SAT-DEBUG] [extractChoices] Priority 5 (\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31): \uD074\uB9AD \uAC00\uB2A5\uD55C \uC694\uC18C \uD0D0\uC0C9`);
-      const allClickable = Array.from(container.querySelectorAll('button, [role="button"], [tabindex], [data-testid], div[onclick], span[onclick]'));
+      const clickableSelectors = ["button", '[role="button"]', "[tabindex]", "[data-testid]", "div[onclick]", "span[onclick]", '[class*="choice"]', '[class*="option"]', ".mat-mdc-radio-button", ".mat-radio-button", ".mat-mdc-list-option"];
+      const allClickableSet = /* @__PURE__ */ new Set();
+      for (const sel of clickableSelectors) {
+        try {
+          const nodes = deepQuerySelectorAll(sel, container);
+          nodes.forEach((el) => allClickableSet.add(el));
+        } catch (e) {
+        }
+      }
+      const allClickable = Array.from(allClickableSet);
       console.log(`[SAT-DEBUG] [extractChoices] \uC804\uCCB4 \uD074\uB9AD \uAC00\uB2A5 \uC694\uC18C: ${allClickable.length}\uAC1C`);
       const visibleClickable = allClickable.filter((el) => {
         try {
@@ -8944,7 +8953,16 @@
     }
     if (choices.length === 0) {
       console.warn("[SAT PDF Exporter] \uBAA8\uB4E0 \uBC29\uBC95\uC73C\uB85C \uC120\uD0DD\uC9C0\uB97C \uCC3E\uC9C0 \uBABB\uD568 - \uC21C\uC218 \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31 \uC2DC\uB3C4");
-      const allElements = Array.from(container.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter((el) => {
+      const tagSelectors = ["div", "span", "p", "li", "button", "label", "td", '[role="button"]'];
+      const allElementsSet = /* @__PURE__ */ new Set();
+      for (const sel of tagSelectors) {
+        try {
+          const nodes = deepQuerySelectorAll(sel, container);
+          nodes.forEach((el) => allElementsSet.add(el));
+        } catch (e) {
+        }
+      }
+      const allElements = Array.from(allElementsSet).filter((el) => {
         try {
           const r = el.getBoundingClientRect();
           return r.width >= 20 && r.height >= 20 && r.bottom >= 0 && r.top <= window.innerHeight;
@@ -8954,20 +8972,40 @@
       });
       allElements.sort((a, b) => a.getBoundingClientRect().width * a.getBoundingClientRect().height - b.getBoundingClientRect().width * b.getBoundingClientRect().height);
       const seenLabels2 = /* @__PURE__ */ new Set();
+      const choicePatterns = [
+        /^\s*([A-D])[\.\)]\s*([\s\S]+)$/,
+        // "A. text" or "A) text" (leading space ok)
+        /^\s*\(([A-D])\)\s*([\s\S]+)$/,
+        // "(A) text"
+        /^([A-D])\s*[\.\)]\s*([\s\S]+)$/
+        // "A ." or "A )"
+      ];
+      const lineChoiceRe = /^\s*([A-D])[\.\)]\s*(.*)$/;
       for (const el of allElements) {
-        const text = (el.innerText || el.textContent || "").trim();
-        const m = text.match(/^([A-D])[\.\)]\s*([\s\S]+)$/);
-        if (!m || m[1] < "A" || m[1] > "D" || seenLabels2.has(m[1]) || text.length > 500) continue;
-        if (/[B-D][\.\)]/g.test(text.replace(m[0], ""))) continue;
+        const rawText = (el.innerText || el.textContent || "").trim();
+        if (!rawText || rawText.length > 600) continue;
+        let m = null;
+        for (const pattern of choicePatterns) {
+          m = rawText.match(pattern);
+          if (m) break;
+        }
+        if (!m && rawText.includes("\n")) {
+          const firstLine = rawText.split("\n")[0];
+          const lineMatch = firstLine.match(lineChoiceRe);
+          if (lineMatch) m = [rawText, lineMatch[1], rawText.slice(firstLine.length).trim() || lineMatch[2]];
+        }
+        if (!m || m[1] < "A" || m[1] > "D" || seenLabels2.has(m[1])) continue;
+        const rest = (m[2] || "").trim();
+        if (/[B-D][\.\)]/.test(rest)) continue;
         seenLabels2.add(m[1]);
         choices.push({
           label: m[1],
-          text: m[2].trim().substring(0, 100),
+          text: rest.substring(0, 100),
           element: el,
           priority: 5,
           source: "\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31"
         });
-        console.log(`[SAT-DEBUG] [extractChoices] \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD6C4\uBCF4 \uBC1C\uACAC: ${m[1]} - ${m[2].trim().substring(0, 30)}`);
+        console.log(`[SAT-DEBUG] [extractChoices] \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD6C4\uBCF4 \uBC1C\uACAC: ${m[1]} - ${rest.substring(0, 30)}`);
         if (choices.length >= 4) break;
       }
       if (choices.length >= 2) {
@@ -12365,16 +12403,26 @@
         const beforeMs = hasImage ? CONFIG.timeouts.beforeChoiceClickWithImage : CONFIG.timeouts.beforeChoiceClick;
         console.log(`[FLOW] \uC120\uC9C0 \uD074\uB9AD \uC804 \uB300\uAE30 ${beforeMs}ms${hasImage ? " (\uC774\uBBF8\uC9C0 \uC788\uC74C)" : ""}...`);
         await new Promise((resolve) => setTimeout(resolve, beforeMs));
-        console.log(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC911...`);
-        const clicked = await clickFirstChoice(sectionType);
+        const maxChoiceClickRetries = 3;
+        const choiceRetryDelayMs = 400;
+        let clicked = await clickFirstChoice(sectionType);
         if (!clicked) {
-          console.warn(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC2E4\uD328. \uB2E4\uC74C \uBB38\uC81C\uB85C \uC774\uB3D9 \uC2DC\uB3C4.`);
-        } else {
-          console.log(`[FLOW] \u2713 \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC131\uACF5`);
-          const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
-          console.log(`[FLOW] \uC120\uC9C0 \uD074\uB9AD \uD6C4 \uC81C\uCD9C \uC804 \uB300\uAE30 ${afterMs}ms${hasImage ? " (\uC774\uBBF8\uC9C0 \uC788\uC74C)" : ""}...`);
-          await new Promise((resolve) => setTimeout(resolve, afterMs));
+          for (let retry = 1; retry <= maxChoiceClickRetries; retry++) {
+            console.log(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC2E4\uD328. \uC7AC\uC2DC\uB3C4 ${retry}/${maxChoiceClickRetries} (${choiceRetryDelayMs}ms \uD6C4)...`);
+            await new Promise((resolve) => setTimeout(resolve, choiceRetryDelayMs));
+            clicked = await clickFirstChoice(sectionType);
+            if (clicked) break;
+          }
         }
+        if (!clicked) {
+          console.warn(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uCD5C\uC885 \uC2E4\uD328. \uC81C\uCD9C\uD558\uC9C0 \uC54A\uACE0 \uAC19\uC740 \uBB38\uC81C \uB2E4\uC2DC \uC2DC\uB3C4\uD569\uB2C8\uB2E4.`);
+          await new Promise((resolve) => setTimeout(resolve, 1e3));
+          continue;
+        }
+        console.log(`[FLOW] \u2713 \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC131\uACF5`);
+        const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
+        console.log(`[FLOW] \uC120\uC9C0 \uD074\uB9AD \uD6C4 \uC81C\uCD9C \uC804 \uB300\uAE30 ${afterMs}ms${hasImage ? " (\uC774\uBBF8\uC9C0 \uC788\uC74C)" : ""}...`);
+        await new Promise((resolve) => setTimeout(resolve, afterMs));
         if (isLastProblem && clicked) {
           console.log(`[FLOW] 27\uBC88: \uC81C\uCD9C \uC804\uC5D0 \uC815\uB2F5 \uCD94\uCD9C (\uD654\uBA74 \uC804\uD658 \uC804)...`);
           await new Promise((resolve) => setTimeout(resolve, 120));
@@ -12501,6 +12549,9 @@
         fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:beforeExtractCurrentProblem", message: "math image extract debug: before extract", data: { sectionType, currentProblemNum, isLastProblem }, timestamp: Date.now(), hypothesisId: "H5" }) }).catch(() => {
         });
         problem = await extractCurrentProblem(sectionType);
+        if (problem) {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
         fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:afterExtractCurrentProblem", message: "math image extract debug: after extract", data: { sectionType, currentProblemNum, problemNull: problem === null, figuresLength: problem?.figures?.length ?? "n/a" }, timestamp: Date.now(), hypothesisId: "H1" }) }).catch(() => {
         });
       } else {
@@ -13839,21 +13890,26 @@
         console.log(`[FRAME] probe received top? ${window === window.top} href: ${window.location.href}`);
         const ok = looksLikeSatQuestionUI();
         console.log(`[FRAME] probe result: ${ok ? "looks like SAT UI" : "not SAT UI"}`);
-        if (ok) {
+        if (ok && ev.source) {
           const bodyTextLen2 = (document.body?.innerText || "").length;
           const buttons2 = document.querySelectorAll('button, [role="button"]').length;
-          window.postMessage({
-            type: "SAT_PROBE_RESULT",
-            probeId: msg.probeId,
-            ok: true,
-            href: window.location.href,
-            title: document.title,
-            isTop: window === window.top,
-            bodyTextLen: bodyTextLen2,
-            buttons: buttons2
-          }, "*");
-          console.log(`[FRAME] probe result sent (ok=true, bodyTextLen=${bodyTextLen2}, buttons=${buttons2})`);
-        } else {
+          const targetOrigin = ev.origin || location.origin;
+          try {
+            ev.source.postMessage({
+              type: "SAT_PROBE_RESULT",
+              probeId: msg.probeId,
+              ok: true,
+              href: window.location.href,
+              title: document.title,
+              isTop: window === window.top,
+              bodyTextLen: bodyTextLen2,
+              buttons: buttons2
+            }, targetOrigin);
+            console.log(`[FRAME] probe result sent (ok=true, bodyTextLen=${bodyTextLen2}, buttons=${buttons2})`);
+          } catch (e) {
+            console.warn("[FRAME] probe result postMessage \uC2E4\uD328 (ev.source\uB85C \uC804\uC1A1):", e);
+          }
+        } else if (!ok) {
           console.log(`[FRAME] probe result: not SAT UI, skipping response`);
         }
         return;
@@ -13864,6 +13920,12 @@
           console.log("[FRAME] SAT_START ignored: not SAT UI");
           return;
         }
+        if (!ev.source) {
+          console.warn("[FRAME] SAT_START ev.source \uC5C6\uC74C - \uACB0\uACFC \uC804\uC1A1 \uBD88\uAC00");
+          return;
+        }
+        const replyTarget = ev.source;
+        const replyOrigin = ev.origin || location.origin;
         console.log("[FRAME] SAT_START received (worker frame)");
         window.__SAT_WORKER_READY = true;
         window.__SAT_IS_WORKER = true;
@@ -13888,18 +13950,26 @@
               reading: allData.reading.length,
               math: allData.math.length
             });
-            window.postMessage({
-              type: "SAT_COLLECTION_COMPLETE",
-              data: allData,
-              href: window.location.href
-            }, "*");
+            try {
+              replyTarget.postMessage({
+                type: "SAT_COLLECTION_COMPLETE",
+                data: allData,
+                href: window.location.href
+              }, replyOrigin);
+            } catch (e) {
+              console.warn("[SAT WORKER] SAT_COLLECTION_COMPLETE postMessage \uC2E4\uD328:", e);
+            }
           } catch (error) {
             console.error("[SAT WORKER] \uC218\uC9D1 \uC624\uB958:", error);
-            window.postMessage({
-              type: "SAT_COLLECTION_ERROR",
-              error: error.message,
-              href: window.location.href
-            }, "*");
+            try {
+              replyTarget.postMessage({
+                type: "SAT_COLLECTION_ERROR",
+                error: error.message,
+                href: window.location.href
+              }, replyOrigin);
+            } catch (e) {
+              console.warn("[SAT WORKER] SAT_COLLECTION_ERROR postMessage \uC2E4\uD328:", e);
+            }
           }
         })();
         return;
@@ -13912,6 +13982,98 @@
       top: window === window.top,
       bodyTextLen,
       buttons
+    });
+  }
+
+  // src/dom/modal.js
+  function showSetCountModal() {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "gemini-sat-modal-overlay";
+      overlay.id = "gemini-sat-set-count-modal";
+      const box = document.createElement("div");
+      box.className = "gemini-sat-modal-box";
+      const title = document.createElement("h3");
+      title.className = "gemini-sat-modal-title";
+      title.textContent = "PDF \uC138\uD2B8 \uC218 \uC785\uB825";
+      const desc = document.createElement("p");
+      desc.className = "gemini-sat-modal-desc";
+      desc.textContent = "\uBB38\uC81C\uC9C0/\uD574\uC124\uC9C0 \uC138\uD2B8\uB97C \uBA87 \uAC1C \uC0DD\uC131\uD560\uAE4C\uC694? (1 \uC774\uC0C1\uC758 \uC815\uC218)";
+      const input = document.createElement("input");
+      input.type = "number";
+      input.className = "gemini-sat-modal-input";
+      input.min = "1";
+      input.max = "99";
+      input.value = "1";
+      input.autofocus = true;
+      const btnGroup = document.createElement("div");
+      btnGroup.className = "gemini-sat-modal-btns";
+      const confirmBtn = document.createElement("button");
+      confirmBtn.type = "button";
+      confirmBtn.className = "gemini-sat-modal-btn gemini-sat-modal-btn-confirm";
+      confirmBtn.textContent = "\uD655\uC778";
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "gemini-sat-modal-btn gemini-sat-modal-btn-cancel";
+      cancelBtn.textContent = "\uCDE8\uC18C";
+      const cleanup = () => {
+        overlay.remove();
+        document.removeEventListener("keydown", onEsc);
+      };
+      const resolveAndCleanup = (value) => {
+        cleanup();
+        resolve(value);
+      };
+      const onEsc = (ev) => {
+        if (ev.key === "Escape") {
+          resolveAndCleanup(null);
+        }
+      };
+      const handleConfirm = () => {
+        const raw = input.value?.trim() ?? "";
+        const count = parseInt(raw, 10);
+        if (!Number.isInteger(count) || count < 1) {
+          showToast("\uC0DD\uC131 \uAC1C\uC218\uB294 1 \uC774\uC0C1\uC758 \uC815\uC218\uC5EC\uC57C \uD569\uB2C8\uB2E4.", "error");
+          input.focus();
+          input.select();
+          return;
+        }
+        if (count > 99) {
+          showToast("\uCD5C\uB300 99\uC138\uD2B8\uAE4C\uC9C0 \uC785\uB825\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.", "error");
+          input.focus();
+          input.select();
+          return;
+        }
+        resolveAndCleanup(count);
+      };
+      confirmBtn.addEventListener("click", handleConfirm);
+      cancelBtn.addEventListener("click", () => {
+        resolveAndCleanup(null);
+      });
+      overlay.addEventListener("click", (ev) => {
+        if (ev.target === overlay) {
+          resolveAndCleanup(null);
+        }
+      });
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          handleConfirm();
+        }
+      });
+      btnGroup.appendChild(confirmBtn);
+      btnGroup.appendChild(cancelBtn);
+      box.appendChild(title);
+      box.appendChild(desc);
+      box.appendChild(input);
+      box.appendChild(btnGroup);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      document.addEventListener("keydown", onEsc);
+      requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+      });
     });
   }
 
@@ -14369,6 +14531,9 @@
      */
     init() {
       console.log("[BOOT] about to create export button", "top?", window === window.top);
+      if (window !== window.top) {
+        return;
+      }
       if (typeof chrome !== "undefined" && chrome.runtime && !chrome.runtime.id) {
         console.warn("[SATApp] Extension context invalidated - \uBC84\uD2BC \uC0DD\uC131 \uC2A4\uD0B5");
         showToast("\uD655\uC7A5 \uD504\uB85C\uADF8\uB7A8\uC774 \uC7AC\uB85C\uB4DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD398\uC774\uC9C0\uB97C \uC0C8\uB85C\uACE0\uCE68\uD574\uC8FC\uC138\uC694.", "error");
@@ -14480,12 +14645,8 @@
     `;
       button.setAttribute("style", button.style.cssText);
       button.addEventListener("click", (event) => {
-        console.log("[CLICK] start button clicked", {
-          isTrusted: event.isTrusted,
-          top: window === window.top,
-          location: location.href,
-          timestamp: Date.now()
-        });
+        event.preventDefault();
+        event.stopPropagation();
         this.handleStartClick(button);
       });
       return button;
@@ -14567,30 +14728,25 @@
     `;
       button.setAttribute("style", button.style.cssText);
       button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
         console.log("[CLICK] export button clicked", {
           isTrusted: event.isTrusted,
           top: window === window.top,
           location: location.href,
           timestamp: Date.now()
         });
-        console.trace("[TRACE] export click stack");
         this.handleExportClick(button);
       });
       return button;
     }
     /**
-     * 생성할 PDF 세트 수를 사용자에게 입력받음
-     * @returns {number|null} 유효한 세트 수 또는 취소(null)
+     * 생성할 PDF 세트 수를 사용자에게 입력받음 (페이지 내 모달 UI 사용)
+     * @returns {Promise<number|null>} 유효한 세트 수 또는 취소(null)
      */
-    promptExportSetCount() {
-      const input = window.prompt("\uBB38\uC81C\uC9C0/\uD574\uC124\uC9C0 \uC138\uD2B8\uB97C \uBA87 \uAC1C \uC0DD\uC131\uD560\uAE4C\uC694?\n(1 \uC774\uC0C1\uC758 \uC815\uC218\uB97C \uC785\uB825\uD558\uC138\uC694)", "1");
-      if (input === null) {
-        return null;
-      }
-      const count = Number.parseInt(input.trim(), 10);
-      if (!Number.isInteger(count) || count < 1) {
-        throw new Error("\uC0DD\uC131 \uAC1C\uC218\uB294 1 \uC774\uC0C1\uC758 \uC815\uC218\uC5EC\uC57C \uD569\uB2C8\uB2E4.");
-      }
+    async promptExportSetCount() {
+      const count = await showSetCountModal();
       return count;
     }
     /**
@@ -14618,7 +14774,7 @@
         this.isProcessing = true;
         console.log("[SATApp] ===== Export to PDF \uBC84\uD2BC \uD074\uB9AD\uB428 =====");
         console.log("[SATApp] \uD604\uC7AC \uD504\uB808\uC784:", window.location.href, "top?", window === window.top);
-        const exportSetCount = this.promptExportSetCount();
+        const exportSetCount = await this.promptExportSetCount();
         if (exportSetCount === null) {
           showToast("PDF \uC0DD\uC131\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "info");
           this.isProcessing = false;
@@ -14692,7 +14848,7 @@
           console.log("[SATApp] Worker \uD504\uB808\uC784 \uBC1C\uACAC:", worker.href);
           showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784 \uBC1C\uACAC! \uC791\uC5C5 \uC2DC\uC791...", "success");
           console.log("[FRAME] SAT_START sent", { workerHref: worker.href, top: window === window.top });
-          window.postMessage({ type: "SAT_START", workerHref: worker.href }, "*");
+          window.postMessage({ type: "SAT_START", workerHref: worker.href }, location.origin);
           allData = await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
               window.removeEventListener("message", onMsg);

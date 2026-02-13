@@ -7,6 +7,7 @@ import { SATScraper } from '../flow/stateMachine.js';
 import { PDFGenerator } from '../pdf/pdfGenerator.js';
 import { looksLikeSatQuestionUI, findWorkerFrame } from '../frame/workerFrame.js';
 import { showToast } from '../dom/wait.js';
+import { showSetCountModal } from '../dom/modal.js';
 import { GeminiChatAutomator, isGeminiChatPage, isSATTestPage } from '../flow/geminiChat.js';
 import { runSetupSequence } from '../flow/geminiSetup.js';
 
@@ -27,6 +28,11 @@ export class SATApp {
    */
   init() {
     console.log('[BOOT] about to create export button', 'top?', window === window.top);
+    
+    // Export 버튼은 top frame에만 생성 (iframe에 생성 시 구글 개인정보/계정 iframe과 겹쳐 탭이 열림)
+    if (window !== window.top) {
+      return;
+    }
     
     // 컨텍스트 유효성 체크
     if (typeof chrome !== 'undefined' && chrome.runtime && !chrome.runtime.id) {
@@ -166,12 +172,8 @@ export class SATApp {
     button.setAttribute('style', button.style.cssText);
 
     button.addEventListener('click', (event) => {
-      console.log('[CLICK] start button clicked', {
-        isTrusted: event.isTrusted,
-        top: window === window.top,
-        location: location.href,
-        timestamp: Date.now()
-      });
+      event.preventDefault();
+      event.stopPropagation();
       this.handleStartClick(button);
     });
     return button;
@@ -268,33 +270,26 @@ export class SATApp {
     button.setAttribute('style', button.style.cssText);
 
     button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       console.log('[CLICK] export button clicked', {
         isTrusted: event.isTrusted,
         top: window === window.top,
         location: location.href,
         timestamp: Date.now()
       });
-      console.trace('[TRACE] export click stack');
       this.handleExportClick(button);
     });
     return button;
   }
 
   /**
-   * 생성할 PDF 세트 수를 사용자에게 입력받음
-   * @returns {number|null} 유효한 세트 수 또는 취소(null)
+   * 생성할 PDF 세트 수를 사용자에게 입력받음 (페이지 내 모달 UI 사용)
+   * @returns {Promise<number|null>} 유효한 세트 수 또는 취소(null)
    */
-  promptExportSetCount() {
-    const input = window.prompt('문제지/해설지 세트를 몇 개 생성할까요?\n(1 이상의 정수를 입력하세요)', '1');
-    if (input === null) {
-      return null;
-    }
-
-    const count = Number.parseInt(input.trim(), 10);
-    if (!Number.isInteger(count) || count < 1) {
-      throw new Error('생성 개수는 1 이상의 정수여야 합니다.');
-    }
-
+  async promptExportSetCount() {
+    const count = await showSetCountModal();
     return count;
   }
 
@@ -328,7 +323,7 @@ export class SATApp {
       console.log('[SATApp] ===== Export to PDF 버튼 클릭됨 =====');
       console.log('[SATApp] 현재 프레임:', window.location.href, 'top?', window === window.top);
 
-      const exportSetCount = this.promptExportSetCount();
+      const exportSetCount = await this.promptExportSetCount();
       if (exportSetCount === null) {
         showToast('PDF 생성이 취소되었습니다.', 'info');
         this.isProcessing = false;
