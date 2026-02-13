@@ -10965,7 +10965,7 @@
   async function clickNextButtonWithFallback(beforeProblemNum) {
     const callId = `next_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     let clickCount = 0;
-    const MAX_CLICKS_PER_CALL = 1;
+    const MAX_CLICKS_PER_CALL = 2;
     console.log(`[NEXT-DEBUG] clickNextButtonWithFallback \uC2DC\uC791 callId=${callId}, beforeProblemNum=${beforeProblemNum}`);
     console.log("[SAT PDF Exporter] [DEBUG] Fail Stage: \uB2E4\uC74C \uBC84\uD2BC \uD074\uB9AD \uB2E8\uACC4 \uC2DC\uC791");
     const maxRetries = 3;
@@ -11089,7 +11089,8 @@
       console.log(`[SAT-DEBUG] \uB2E4\uC74C \uBC84\uD2BC \uD074\uB9AD \uC2DC\uB3C4 (${beforeProblemNum} \u2192 \uB2E4\uC74C) callId=${callId}, clickCount=${clickCount}`);
       if (clickCount >= MAX_CLICKS_PER_CALL) {
         console.error(`[NEXT-DEBUG] \u2717 \uD074\uB9AD \uC911\uBCF5 \uBC29\uC9C0: callId=${callId}\uC5D0\uC11C \uC774\uBBF8 ${clickCount}\uBC88 \uD074\uB9AD\uD568 (\uCD5C\uB300 ${MAX_CLICKS_PER_CALL}\uBC88)`);
-        throw new Error(`\uD074\uB9AD \uC911\uBCF5 \uBC29\uC9C0: callId ${callId}\uC5D0\uC11C \uC774\uBBF8 \uCD5C\uB300 \uD074\uB9AD \uD69F\uC218 \uB3C4\uB2EC`);
+        console.warn(`[NEXT-DEBUG] \uD074\uB9AD \uD55C\uB3C4 \uB3C4\uB2EC\uB85C \uC774\uBC88 \uD638\uCD9C\uC744 \uC885\uB8CC\uD558\uACE0 \uC0C1\uC704 \uB8E8\uD504\uC5D0\uC11C \uC7AC\uC2DC\uB3C4\uD569\uB2C8\uB2E4. callId=${callId}`);
+        return false;
       }
       let clickPerformed = false;
       const clickTimestamp = Date.now();
@@ -11099,7 +11100,7 @@
         clickCount++;
         clickPerformed = true;
         console.log(`[NEXT-DEBUG] \u2713 Next \uBC84\uD2BC \uD074\uB9AD \uC644\uB8CC: click() \uBA54\uC11C\uB4DC \uC0AC\uC6A9, callId=${callId}, clickCount=${clickCount}`);
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 120));
       } catch (e) {
         console.warn("[SAT-DEBUG] click() \uBA54\uC11C\uB4DC \uC2E4\uD328, dispatchEvent \uD3F4\uBC31 \uC2DC\uB3C4:", e);
         clickPerformed = false;
@@ -12256,7 +12257,7 @@
           }
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, 15));
+      await new Promise((resolve) => setTimeout(resolve, 120));
       const retryProblemNum = getCurrentProblemNumber();
       if (retryProblemNum > 0 && retryProblemNum !== currentProblemNum) {
         console.log(`[FLOW] \uBB38\uC81C \uBC88\uD638 \uC7AC\uD655\uC778: ${currentProblemNum} \u2192 ${retryProblemNum}`);
@@ -12376,7 +12377,7 @@
         }
         if (isLastProblem && clicked) {
           console.log(`[FLOW] 27\uBC88: \uC81C\uCD9C \uC804\uC5D0 \uC815\uB2F5 \uCD94\uCD9C (\uD654\uBA74 \uC804\uD658 \uC804)...`);
-          await new Promise((resolve) => setTimeout(resolve, 15));
+          await new Promise((resolve) => setTimeout(resolve, 120));
           correctAnswer = detectCorrectAnswer();
           explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
           if (correctAnswer) {
@@ -12427,7 +12428,7 @@
         } else {
           console.log(`[FLOW] \u2713 \uCC44\uC810 \uC644\uB8CC`);
           console.log(`[FLOW] \uC815\uB2F5 \uD45C\uC2DC DOM \uBC18\uC601 \uB300\uAE30 \uC911...`);
-          await new Promise((resolve) => setTimeout(resolve, 15));
+          await new Promise((resolve) => setTimeout(resolve, 120));
           let retryCount = 0;
           let answerMarkingFound = false;
           while (retryCount < 5) {
@@ -12440,7 +12441,7 @@
                 break;
               }
             }
-            await new Promise((resolve) => setTimeout(resolve, 15));
+            await new Promise((resolve) => setTimeout(resolve, 120));
             retryCount++;
           }
           if (answerMarkingFound) {
@@ -12458,7 +12459,7 @@
               console.log(`[FLOW] \u2713 \uC815\uB2F5 \uCD94\uCD9C \uC131\uACF5: ${correctAnswer}`);
             } else {
               console.warn(`[FLOW] \u2717 \uC815\uB2F5 \uCD94\uCD9C \uC2E4\uD328 (\uCC44\uC810 \uC9C1\uD6C4 \uC2DC\uB3C4)`);
-              await new Promise((resolve) => setTimeout(resolve, 15));
+              await new Promise((resolve) => setTimeout(resolve, 120));
               const retryProblemNum2 = getCurrentProblemNumber();
               fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:retryExtract", message: "retrying answer extraction", data: { currentProblemNum, retryProblemNum: retryProblemNum2 }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
               });
@@ -12485,7 +12486,7 @@
           console.log(`[FLOW] \uBAA8\uB4C8 2 \uBB38\uC81C 1: \uC774\uBBF8 \uCC44\uC810 \uD310\uBCC4\uD588\uC73C\uB098 \uC815\uB2F5 \uC5C6\uC74C. \uC120\uD0DD\uC9C0 \uD074\uB9AD \uACBD\uB85C \uC7AC\uC2DC\uB3C4...`);
           const retryClicked = await clickFirstChoice(sectionType);
           if (retryClicked) {
-            await new Promise((resolve) => setTimeout(resolve, 30));
+            await new Promise((resolve) => setTimeout(resolve, 120));
             correctAnswer = detectCorrectAnswer();
             explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
             if (correctAnswer) {
@@ -12672,7 +12673,7 @@
           break;
         }
         await waitForContentLoad(CONFIG.timeouts.screenTransition);
-        await new Promise((resolve) => setTimeout(resolve, 15));
+        await new Promise((resolve) => setTimeout(resolve, 120));
         afterProblemNum = getCurrentProblemNumber();
         const afterProgress = getProgressState();
         if (afterProgress) {
@@ -12743,7 +12744,7 @@
           }
         } else if (afterProblemNum <= problemNumBeforeNext) {
           console.warn(`[FLOW] \uBB38\uC81C \uBC88\uD638\uAC00 \uC99D\uAC00\uD558\uC9C0 \uC54A\uC74C: ${problemNumBeforeNext} \u2192 ${afterProblemNum}. \uC7AC\uC2DC\uB3C4...`);
-          await new Promise((resolve) => setTimeout(resolve, 15));
+          await new Promise((resolve) => setTimeout(resolve, 120));
           continue;
         }
       }
@@ -13077,7 +13078,9 @@
         }
         console.log("[SATScraper] \uC218\uD559 \uC139\uC158 \uC9C4\uC785 \uC804 \uAC80\uC99D \uC2DC\uC791...");
         if (allData.reading.length < CONFIG.collection.maxProblems * 2) {
-          throw new Error(`Reading and Writing \uC139\uC158 \uBBF8\uC644\uB8CC: ${allData.reading.length}/${CONFIG.collection.maxProblems * 2} \uBB38\uC81C\uB9CC \uC218\uC9D1\uB428`);
+          const rwIncompleteMsg = `Reading and Writing \uC139\uC158 \uBBF8\uC644\uB8CC: ${allData.reading.length}/${CONFIG.collection.maxProblems * 2} \uBB38\uC81C\uB9CC \uC218\uC9D1\uB428`;
+          console.warn(`[SATScraper] ${rwIncompleteMsg}`);
+          showToast(`\uACBD\uACE0: ${rwIncompleteMsg} (\uC218\uD559 \uC139\uC158 \uC9C4\uC785\uC740 \uACC4\uC18D \uC2DC\uB3C4)`, "info");
         }
         const bodyText = (document.body.innerText || document.body.textContent || "").toLowerCase();
         const hasMathText = bodyText.includes("math") || bodyText.includes("\uC218\uD559") || bodyText.includes("mathematics") || bodyText.includes("\uC218\uD559 \uC139\uC158");
@@ -13725,11 +13728,14 @@
      * @param {Object} answerDoc - 정답지 PDF 문서
      * @returns {Promise<void>}
      */
-    async downloadPDFs(problemDoc, answerDoc) {
+    async downloadPDFs(problemDoc, answerDoc, options = {}) {
       try {
         const dateStr = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-        const problemFileName = `SAT_Problems_${dateStr}.pdf`;
-        const answerFileName = `SAT_Answers_${dateStr}.pdf`;
+        const copyIndex = Number.isInteger(options.copyIndex) ? options.copyIndex : 1;
+        const totalCopies = Number.isInteger(options.totalCopies) ? options.totalCopies : 1;
+        const copySuffix = totalCopies > 1 ? `_Set${String(copyIndex).padStart(2, "0")}` : "";
+        const problemFileName = `SAT_Problems_${dateStr}${copySuffix}.pdf`;
+        const answerFileName = `SAT_Answers_${dateStr}${copySuffix}.pdf`;
         console.log(`[PDFGenerator] \uBB38\uC81C\uC9C0 PDF \uC800\uC7A5: ${problemFileName}`);
         problemDoc.save(problemFileName);
         await new Promise((resolve) => setTimeout(resolve, CONFIG.timeouts.pdfDownloadDelay));
@@ -14112,7 +14118,11 @@
           console.log("[GeminiChat] SAT UI \uAC10\uC9C0\uB428 (getProgressState)");
           return true;
         }
-        const bodyText = (document.body?.innerText || document.body?.textContent || "").toLowerCase();
+        const bodyTextRaw = document.body?.innerText || document.body?.textContent || "";
+        const bodyText = bodyTextRaw.toLowerCase();
+        if (bodyText.includes("conversation was created with a gem that has been deleted") || bodyText.includes("create a new gem") || bodyText.includes("deleted gem")) {
+          throw new Error("\uD604\uC7AC \uB300\uD654\uAC00 \uC0AD\uC81C\uB41C Gem\uC5D0 \uC5F0\uACB0\uB418\uC5B4 SAT \uD14C\uC2A4\uD2B8\uB97C \uC2DC\uC791\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. Gemini\uC5D0\uC11C \uC0C8 \uC77C\uBC18 \uCC44\uD305\uC744 \uC5F4\uAC70\uB098 \uC0C8 Gem\uC744 \uB9CC\uB4E0 \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.");
+        }
         if (bodyText.includes("reading") && bodyText.includes("writing")) {
           console.log("[GeminiChat] SAT UI \uAC10\uC9C0\uB428 (Reading/Writing \uD14D\uC2A4\uD2B8)");
           return true;
@@ -14569,6 +14579,21 @@
       return button;
     }
     /**
+     * 생성할 PDF 세트 수를 사용자에게 입력받음
+     * @returns {number|null} 유효한 세트 수 또는 취소(null)
+     */
+    promptExportSetCount() {
+      const input = window.prompt("\uBB38\uC81C\uC9C0/\uD574\uC124\uC9C0 \uC138\uD2B8\uB97C \uBA87 \uAC1C \uC0DD\uC131\uD560\uAE4C\uC694?\n(1 \uC774\uC0C1\uC758 \uC815\uC218\uB97C \uC785\uB825\uD558\uC138\uC694)", "1");
+      if (input === null) {
+        return null;
+      }
+      const count = Number.parseInt(input.trim(), 10);
+      if (!Number.isInteger(count) || count < 1) {
+        throw new Error("\uC0DD\uC131 \uAC1C\uC218\uB294 1 \uC774\uC0C1\uC758 \uC815\uC218\uC5EC\uC57C \uD569\uB2C8\uB2E4.");
+      }
+      return count;
+    }
+    /**
      * Export 버튼 클릭 핸들러
      * @param {HTMLElement} button - 클릭된 버튼 요소
      */
@@ -14593,6 +14618,12 @@
         this.isProcessing = true;
         console.log("[SATApp] ===== Export to PDF \uBC84\uD2BC \uD074\uB9AD\uB428 =====");
         console.log("[SATApp] \uD604\uC7AC \uD504\uB808\uC784:", window.location.href, "top?", window === window.top);
+        const exportSetCount = this.promptExportSetCount();
+        if (exportSetCount === null) {
+          showToast("PDF \uC0DD\uC131\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "info");
+          this.isProcessing = false;
+          return;
+        }
         button.disabled = true;
         button.classList.add("loading");
         button.textContent = "";
@@ -14691,13 +14722,18 @@
           throw new Error("\uCD94\uCD9C\uD560 SAT \uBB38\uC81C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
         }
         const totalProblems = allData.reading.length + allData.math.length;
-        showToast(`${totalProblems}\uAC1C\uC758 \uBB38\uC81C\uB97C \uC218\uC9D1\uD588\uC2B5\uB2C8\uB2E4. PDF \uC0DD\uC131 \uC911...`, "info");
-        showToast("\uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911...", "info");
-        const problemDoc = this.pdfGenerator.generateProblemsPDF(allData);
-        showToast("\uC815\uB2F5\uC9C0 PDF \uC0DD\uC131 \uC911...", "info");
-        const answerDoc = this.pdfGenerator.generateAnswersPDF(allData);
-        await this.pdfGenerator.downloadPDFs(problemDoc, answerDoc);
-        showToast("PDF\uAC00 \uC131\uACF5\uC801\uC73C\uB85C \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4!", "success");
+        showToast(`${totalProblems}\uAC1C\uC758 \uBB38\uC81C\uB97C \uC218\uC9D1\uD588\uC2B5\uB2C8\uB2E4. PDF ${exportSetCount}\uC138\uD2B8 \uC0DD\uC131 \uC911...`, "info");
+        for (let i = 1; i <= exportSetCount; i += 1) {
+          showToast(`\uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
+          const problemDoc = this.pdfGenerator.generateProblemsPDF(allData);
+          showToast(`\uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
+          const answerDoc = this.pdfGenerator.generateAnswersPDF(allData);
+          await this.pdfGenerator.downloadPDFs(problemDoc, answerDoc, {
+            copyIndex: i,
+            totalCopies: exportSetCount
+          });
+        }
+        showToast(`PDF ${exportSetCount}\uC138\uD2B8\uAC00 \uC131\uACF5\uC801\uC73C\uB85C \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4!`, "success");
         button.textContent = "\u2713 Exported!";
         setTimeout(() => {
           button.textContent = "Export to PDF";

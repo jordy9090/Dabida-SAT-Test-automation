@@ -423,7 +423,9 @@ export class SATScraper {
       
       // 증거 1: Reading and Writing 문제가 충분히 수집되었는지 확인
       if (allData.reading.length < CONFIG.collection.maxProblems * 2) {
-        throw new Error(`Reading and Writing 섹션 미완료: ${allData.reading.length}/${CONFIG.collection.maxProblems * 2} 문제만 수집됨`);
+        const rwIncompleteMsg = `Reading and Writing 섹션 미완료: ${allData.reading.length}/${CONFIG.collection.maxProblems * 2} 문제만 수집됨`;
+        console.warn(`[SATScraper] ${rwIncompleteMsg}`);
+        showToast(`경고: ${rwIncompleteMsg} (수학 섹션 진입은 계속 시도)`, 'info');
       }
       
       // 증거 2: 화면에 "수학" 또는 "Math" 관련 텍스트/버튼이 있는지 확인

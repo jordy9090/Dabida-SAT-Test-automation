@@ -275,8 +275,18 @@ export class GeminiChatAutomator {
         return true;
       }
       
+
+      const bodyTextRaw = (document.body?.innerText || document.body?.textContent || '');
+      const bodyText = bodyTextRaw.toLowerCase();
+
+      // Gem 삭제/비활성 상태 메시지 감지
+      if (bodyText.includes('conversation was created with a gem that has been deleted') ||
+          bodyText.includes('create a new gem') ||
+          bodyText.includes('deleted gem')) {
+        throw new Error('현재 대화가 삭제된 Gem에 연결되어 SAT 테스트를 시작할 수 없습니다. Gemini에서 새 일반 채팅을 열거나 새 Gem을 만든 뒤 다시 시도해주세요.');
+      }
+
       // "Reading", "Writing", "Math" 텍스트 확인
-      const bodyText = (document.body?.innerText || document.body?.textContent || '').toLowerCase();
       if (bodyText.includes('reading') && bodyText.includes('writing')) {
         console.log('[GeminiChat] SAT UI 감지됨 (Reading/Writing 텍스트)');
         return true;

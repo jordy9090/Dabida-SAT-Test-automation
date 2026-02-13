@@ -651,11 +651,14 @@ export class PDFGenerator {
    * @param {Object} answerDoc - 정답지 PDF 문서
    * @returns {Promise<void>}
    */
-  async downloadPDFs(problemDoc, answerDoc) {
+  async downloadPDFs(problemDoc, answerDoc, options = {}) {
     try {
       const dateStr = new Date().toISOString().split('T')[0];
-      const problemFileName = `SAT_Problems_${dateStr}.pdf`;
-      const answerFileName = `SAT_Answers_${dateStr}.pdf`;
+      const copyIndex = Number.isInteger(options.copyIndex) ? options.copyIndex : 1;
+      const totalCopies = Number.isInteger(options.totalCopies) ? options.totalCopies : 1;
+      const copySuffix = totalCopies > 1 ? `_Set${String(copyIndex).padStart(2, '0')}` : '';
+      const problemFileName = `SAT_Problems_${dateStr}${copySuffix}.pdf`;
+      const answerFileName = `SAT_Answers_${dateStr}${copySuffix}.pdf`;
 
       console.log(`[PDFGenerator] 문제지 PDF 저장: ${problemFileName}`);
       problemDoc.save(problemFileName);
@@ -670,4 +673,3 @@ export class PDFGenerator {
     }
   }
 }
-

@@ -281,6 +281,24 @@ export class SATApp {
   }
 
   /**
+   * 생성할 PDF 세트 수를 사용자에게 입력받음
+   * @returns {number|null} 유효한 세트 수 또는 취소(null)
+   */
+  promptExportSetCount() {
+    const input = window.prompt('문제지/해설지 세트를 몇 개 생성할까요?\n(1 이상의 정수를 입력하세요)', '1');
+    if (input === null) {
+      return null;
+    }
+
+    const count = Number.parseInt(input.trim(), 10);
+    if (!Number.isInteger(count) || count < 1) {
+      throw new Error('생성 개수는 1 이상의 정수여야 합니다.');
+    }
+
+    return count;
+  }
+
+  /**
    * Export 버튼 클릭 핸들러
    * @param {HTMLElement} button - 클릭된 버튼 요소
    */
@@ -309,6 +327,13 @@ export class SATApp {
       this.isProcessing = true;
       console.log('[SATApp] ===== Export to PDF 버튼 클릭됨 =====');
       console.log('[SATApp] 현재 프레임:', window.location.href, 'top?', window === window.top);
+
+      const exportSetCount = this.promptExportSetCount();
+      if (exportSetCount === null) {
+        showToast('PDF 생성이 취소되었습니다.', 'info');
+        this.isProcessing = false;
+        return;
+      }
       
       button.disabled = true;
       button.classList.add('loading');
@@ -440,19 +465,24 @@ export class SATApp {
 
       // 3. PDF 생성
       const totalProblems = allData.reading.length + allData.math.length;
-      showToast(`${totalProblems}개의 문제를 수집했습니다. PDF 생성 중...`, 'info');
-      
-      showToast('문제지 PDF 생성 중...', 'info');
-      const problemDoc = this.pdfGenerator.generateProblemsPDF(allData);
-      
-      showToast('정답지 PDF 생성 중...', 'info');
-      const answerDoc = this.pdfGenerator.generateAnswersPDF(allData);
+      showToast(`${totalProblems}개의 문제를 수집했습니다. PDF ${exportSetCount}세트 생성 중...`, 'info');
 
-      // 4. PDF 다운로드
-      await this.pdfGenerator.downloadPDFs(problemDoc, answerDoc);
+      for (let i = 1; i <= exportSetCount; i += 1) {
+        showToast(`문제지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        const problemDoc = this.pdfGenerator.generateProblemsPDF(allData);
+
+        showToast(`해설지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        const answerDoc = this.pdfGenerator.generateAnswersPDF(allData);
+
+        // 4. PDF 다운로드
+        await this.pdfGenerator.downloadPDFs(problemDoc, answerDoc, {
+          copyIndex: i,
+          totalCopies: exportSetCount
+        });
+      }
 
       // 성공 메시지
-      showToast('PDF가 성공적으로 생성되었습니다!', 'success');
+      showToast(`PDF ${exportSetCount}세트가 성공적으로 생성되었습니다!`, 'success');
       button.textContent = '✓ Exported!';
       setTimeout(() => {
         button.textContent = 'Export to PDF';
@@ -537,4 +567,3 @@ export function initButtonSafely() {
     setTimeout(() => initButtonSafely(), 1000);
   }
 }
-
