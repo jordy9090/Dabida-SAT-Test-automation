@@ -7,6 +7,13 @@ import { waitForCondition, waitForContentLoad } from '../dom/wait.js';
 import { isQuestionScreen, getCurrentProblemNumber, getProgressState, extractCurrentProblem, getQuestionSignature, isGraded, waitForGrading, detectCorrectAnswer, extractExplanationAfterGrading, findSatRoot, isModuleStartScreen } from '../dom/extract.js';
 import { clickNextButtonWithFallback, clickFirstChoice, clickSubmitWithConfirmation, findNavigationButton } from '../dom/buttons.js';
 
+/** 현재 문제 영역에 이미지/사진이 있는지 여부 (선지 구간 대기 시간 조절용) */
+function currentProblemHasImage() {
+  const root = findSatRoot();
+  if (!root) return false;
+  return !!root.querySelector('img, figure, [class*="figure"], [class*="image"], [data-testid*="figure"], [data-testid*="image"]');
+}
+
 /**
  * 모듈의 모든 문제 수집
  * @param {Object} allData - 전체 데이터 객체 {reading: [], math: []}
@@ -57,7 +64,9 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
   const seenSignatures = new Set();
   let consecutiveDuplicates = 0;
   const maxConsecutiveDuplicates = 3;
-  
+  let consecutiveExtractFailures = 0;
+  const maxExtractRetries = 5;
+
   // 루프 조건: TEMP 모드가 아니면 현재 모듈에서 정확히 27개까지 수집 (27번 문제 포함)
   // BUG FIX: targetArray.length가 아닌 현재 모듈의 문제 수를 기준으로 루프 조건 설정
   // BUG FIX: Module 2에서는 progress 증가 확인 시 consecutiveDuplicates 체크 완화
@@ -266,6 +275,12 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     // BUG FIX: 27번 문제는 제출 전에 문제 추출 + 정답 추출 (선택지 클릭 직후, 제출 전)
     // 이유: 제출 시 화면 전환이 즉시 발생하여 제출 후에는 정답 DOM이 사라짐
     if (!alreadyGraded) {
+      // 선지 선택 구간이 너무 빨리 지나가지 않도록 대기 (특히 사진 있는 문제)
+      const hasImage = currentProblemHasImage();
+      const beforeMs = hasImage ? CONFIG.timeouts.beforeChoiceClickWithImage : CONFIG.timeouts.beforeChoiceClick;
+      console.log(`[FLOW] 선지 클릭 전 대기 ${beforeMs}ms${hasImage ? ' (이미지 있음)' : ''}...`);
+      await new Promise(resolve => setTimeout(resolve, beforeMs));
+
       // 선택지 클릭 (A)
       console.log(`[FLOW] 선택지 클릭 중...`);
       const clicked = await clickFirstChoice(sectionType);
@@ -273,8 +288,12 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         console.warn(`[FLOW] 선택지 클릭 실패. 다음 문제로 이동 시도.`);
       } else {
         console.log(`[FLOW] ✓ 선택지 클릭 성공`);
+        // 선지 클릭 후 제출 전 대기 (다음 선지 구간이 너무 빨리 지나가지 않도록)
+        const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
+        console.log(`[FLOW] 선지 클릭 후 제출 전 대기 ${afterMs}ms${hasImage ? ' (이미지 있음)' : ''}...`);
+        await new Promise(resolve => setTimeout(resolve, afterMs));
       }
-      
+
       // BUG FIX: 27번 문제는 제출 전에 정답 추출 (선택지 클릭 시 즉시 채점됨)
       if (isLastProblem && clicked) {
         console.log(`[FLOW] 27번: 제출 전에 정답 추출 (화면 전환 전)...`);
@@ -427,7 +446,13 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     if (!problem) {
       // 27번 문제가 아니면 일반적으로 문제 추출
       console.log(`[FLOW] 문제 추출 중...`);
+      // #region agent log
+      fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:beforeExtractCurrentProblem',message:'math image extract debug: before extract',data:{sectionType,currentProblemNum,isLastProblem},timestamp:Date.now(),hypothesisId:'H5'})}).catch(()=>{});
+      // #endregion
       problem = await extractCurrentProblem(sectionType);
+      // #region agent log
+      fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:afterExtractCurrentProblem',message:'math image extract debug: after extract',data:{sectionType,currentProblemNum,problemNull:problem===null,figuresLength:problem?.figures?.length??'n/a'},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
     } else {
       console.log(`[FLOW] 27번 문제는 이미 추출했습니다.`);
       // 27번 문제는 이미 추출했으므로 정답 추출 시도 (채점 완료 여부와 관계없이)
@@ -443,6 +468,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     }
     
     if (problem) {
+      consecutiveExtractFailures = 0; // 추출 성공 시 리셋
       // ============================================================================
       // STEP 1 추가 보강: problemNumber 최종 확인 및 강제 주입
       // ============================================================================
@@ -558,9 +584,21 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         }
       }
     } else {
-      console.warn(`[FLOW] 문제 추출 실패. 하지만 다음 문제로 이동은 시도합니다.`);
+      console.warn(`[FLOW] 문제 추출 실패. 다음 문제로 넘어가지 않고 재시도합니다.`);
     }
-    
+
+    // extract가 아직 안 되었으면 다음 문제로 넘어가지 않음
+    if (!problem) {
+      consecutiveExtractFailures++;
+      if (consecutiveExtractFailures >= maxExtractRetries) {
+        console.warn(`[FLOW] 문제 추출 연속 ${maxExtractRetries}회 실패. 수집 종료.`);
+        break;
+      }
+      console.log(`[FLOW] 추출 재시도 대기 후 같은 문제 다시 시도 (${consecutiveExtractFailures}/${maxExtractRetries})...`);
+      await new Promise(resolve => setTimeout(resolve, 800));
+      continue;
+    }
+
     // STEP 4: 정답/해설 할당 (이미 채점 직후에 추출한 결과 사용)
     if (problemExtracted && problem) {
       const assignmentProblemNum = problem.problemNumber || currentProblemNum;

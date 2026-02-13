@@ -5,7 +5,7 @@ package-lock.json
 # Build outputs
 dist/*
 !dist/content.js
-*.map
+!dist/content.js.map	
 
 # OS files
 .DS_Store

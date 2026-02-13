@@ -25,6 +25,11 @@ export const CONFIG = {
     clickDelay: 120,        // 클릭 후 대기
     scrollDelay: 150,       // 스크롤 후 대기
     pdfDownloadDelay: 300,  // PDF 다운로드 간격
+    // 문제 생성 탭: 선지 선택 구간 대기 (너무 빨리 지나가는 것 방지, 특히 사진 있는 문제)
+    beforeChoiceClick: 400,           // 선지 클릭 전 대기 (문제/선지 인지 시간)
+    beforeChoiceClickWithImage: 2800, // 이미지 있는 문제: 선지 클릭 전 2.8초 대기
+    afterChoiceClick: 450,            // 선지 클릭 후 제출 전 대기
+    afterChoiceClickWithImage: 2800,  // 이미지 있는 문제: 선지 클릭 후 2.8초 대기
   },
   // 재시도 설정
   retries: {

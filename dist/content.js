@@ -8543,6 +8543,8 @@
       fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:beforeFindCandidates", message: "DEBUG STEP 2: \uD6C4\uBCF4 \uD0D0\uC0C9 \uC804 \uAE30\uBCF8 \uC140\uB809\uD130 \uAC80\uC99D", data: { imgCount, canvasCount, svgCount, bgImageElements }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "B" }) }).catch(() => {
       });
       const candidates = findFigureCandidates(satRoot);
+      fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:afterFindCandidates", message: "math image extract: candidates count", data: { imgCount, canvasCount, svgCount, candidatesCount: candidates.length }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {
+      });
       console.log(`[DEBUG STEP 2] findFigureCandidates \uACB0\uACFC: ${candidates.length}\uAC1C \uD6C4\uBCF4`);
       const candidateDetails = candidates.map((c, idx) => {
         const rect = c.element.getBoundingClientRect();
@@ -8582,9 +8584,9 @@
           });
         }
       }
-      console.log(`[DEBUG STEP 2] extractFigures \uC644\uB8CC: ${figures.length}\uAC1C figure \uCD94\uCD9C`);
-      fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:complete", message: "DEBUG STEP 2: extractFigures \uC644\uB8CC", data: { figuresLength: figures.length, html2canvasCount }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "B" }) }).catch(() => {
+      fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:complete", message: "math image extract: figures result", data: { figuresLength: figures.length, html2canvasCount, candidatesCount: candidates.length }, timestamp: Date.now(), hypothesisId: "H4" }) }).catch(() => {
       });
+      console.log(`[DEBUG STEP 2] extractFigures \uC644\uB8CC: ${figures.length}\uAC1C figure \uCD94\uCD9C`);
       console.log(`[FIGURE] \uCD1D ${figures.length}\uAC1C figure \uCD94\uCD9C \uC644\uB8CC (html2canvas \uC0AC\uC6A9: ${html2canvasCount}\uAC1C)`);
     } catch (error) {
       console.warn("[FIGURE] extractFigures \uC804\uCCB4 \uC624\uB958 (\uBE48 \uBC30\uC5F4 \uBC18\uD658):", error);
@@ -8977,6 +8979,8 @@
   async function extractCurrentProblem(sectionType) {
     if (window !== window.top && !window.__SAT_IS_WORKER) {
       console.warn("[SAT-DEBUG] [extractCurrentProblem] Worker frame\uC774 \uC544\uB2CC iframe\uC5D0\uC11C \uC2E4\uD589 \uC2DC\uB3C4 - \uC2A4\uD0B5");
+      fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:frameGuard", message: "math image extract: return null (frame guard)", data: { sectionType }, timestamp: Date.now(), hypothesisId: "H1" }) }).catch(() => {
+      });
       return null;
     }
     await new Promise((resolve) => {
@@ -9110,25 +9114,26 @@
     let figures = [];
     try {
       const satRoot = findSatRoot();
-      fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:satRootCheck", message: "DEBUG STEP 1: satRoot \uD655\uC778", data: { problemNum, satRootFound: !!satRoot }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
+      const satRootTag = satRoot ? satRoot.tagName : null;
+      const satRootIsBody = satRoot === document.body;
+      const imgInRoot = satRoot ? satRoot.querySelectorAll("img").length : 0;
+      fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:satRootCheck", message: "math image extract: satRoot before extractFigures", data: { sectionType, problemNum, satRootFound: !!satRoot, satRootTag, satRootIsBody, imgInRoot }, timestamp: Date.now(), hypothesisId: "H2" }) }).catch(() => {
       });
       if (satRoot) {
         console.log(`[DEBUG STEP 1] extractFigures \uD638\uCD9C \uC2DC\uC791: \uBB38\uC81C ${problemNum}`);
-        fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:extractFiguresCall", message: "DEBUG STEP 1: extractFigures \uD638\uCD9C", data: { problemNum }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
-        });
         figures = await extractFigures(satRoot);
         console.log(`[DEBUG STEP 1] extractFigures \uC644\uB8CC: \uBB38\uC81C ${problemNum}, figures.length=${figures.length}`);
-        fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:extractFiguresResult", message: "DEBUG STEP 1: extractFigures \uACB0\uACFC", data: { problemNum, figuresLength: figures.length, figures: figures.map((f) => ({ w: f.width, h: f.height, dataUrlLength: f.dataUrl ? f.dataUrl.length : 0 })) }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
+        fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:extractFiguresResult", message: "math image extract: after extractFigures", data: { sectionType, problemNum, figuresLength: figures.length }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {
         });
         console.log(`[SAT-DEBUG] [extractCurrentProblem] \uBB38\uC81C ${problemNum}\uC5D0\uC11C ${figures.length}\uAC1C figure \uCD94\uCD9C \uC644\uB8CC`);
       } else {
         console.warn("[SAT-DEBUG] [extractCurrentProblem] satRoot\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC5B4 figure \uCD94\uCD9C \uC2A4\uD0B5");
-        fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:satRootNotFound", message: "DEBUG STEP 1: satRoot \uC5C6\uC74C", data: { problemNum }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
+        fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:satRootNotFound", message: "math image extract: satRoot null", data: { sectionType, problemNum }, timestamp: Date.now(), hypothesisId: "H2" }) }).catch(() => {
         });
       }
     } catch (error) {
       console.warn("[SAT-DEBUG] [extractCurrentProblem] figure \uCD94\uCD9C \uC624\uB958 (\uACC4\uC18D \uC9C4\uD589):", error);
-      fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:extractFiguresError", message: "DEBUG STEP 1: extractFigures \uC624\uB958", data: { problemNum, errorMessage: error.message, errorStack: error.stack }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
+      fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:extractFiguresError", message: "math image extract: extractFigures throw", data: { sectionType, problemNum, errorMessage: error.message }, timestamp: Date.now(), hypothesisId: "H4" }) }).catch(() => {
       });
       figures = [];
     }
@@ -9728,6 +9733,27 @@
       }
     } catch {
     }
+    if (optionCandidates.length === 0) {
+      const textOptionEls = Array.from(satRoot.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter((el) => {
+        try {
+          const r = el.getBoundingClientRect();
+          return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot.contains(el);
+        } catch {
+          return false;
+        }
+      });
+      for (const el of textOptionEls) {
+        const text = (el.innerText || el.textContent || "").trim();
+        const m = text.match(/^([A-D])[\.\)]\s*/);
+        if (!m || text.length > 500) continue;
+        const letter = m[1];
+        const lower = text.toLowerCase();
+        if (lower.includes("\uC815\uB2F5\uC785\uB2C8\uB2E4") || lower.includes("this is correct") || /\bcorrect\b/.test(lower) || el.className && /\banswered-correct\b|\bcorrect\b/.test(String(el.className))) {
+          console.log(`[SAT PDF Exporter] \uC815\uB2F5 \uBC1C\uACAC: ${letter} (\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31)`);
+          return letter;
+        }
+      }
+    }
     if (typeof window !== "undefined" && window.location) {
       const logData = {
         location: "extract.js:detectCorrectAnswer:failed",
@@ -9870,6 +9896,27 @@
           }
         }
       }
+      if (!correctOptionElement && correctAnswer) {
+        const textOptionEls = Array.from(satRoot.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter((el) => {
+          try {
+            const r = el.getBoundingClientRect();
+            return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot.contains(el);
+          } catch {
+            return false;
+          }
+        });
+        for (const el of textOptionEls) {
+          const text = (el.innerText || el.textContent || "").trim();
+          const m = text.match(/^([A-D])[\.\)]\s*/);
+          if (!m || m[1] !== correctAnswer) continue;
+          const lower = text.toLowerCase();
+          if (lower.includes("\uC815\uB2F5\uC785\uB2C8\uB2E4") || lower.includes("this is correct") || /\bcorrect\b/.test(lower) || el.className && /\banswered-correct\b|\bcorrect\b/.test(String(el.className))) {
+            correctOptionElement = el;
+            console.log(`[SAT PDF Exporter] \uC815\uB2F5 \uC635\uC158 \uC694\uC18C \uBC1C\uACAC (\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31): ${correctAnswer}`);
+            break;
+          }
+        }
+      }
       if (!correctOptionElement) {
         console.warn(`[SAT PDF Exporter] \uC815\uB2F5 \uC635\uC158 \uC694\uC18C\uB97C \uCC3E\uC9C0 \uBABB\uD568 (\uC815\uB2F5: ${correctAnswer}, \uD6C4\uBCF4: ${candidates.length}\uAC1C)`);
       }
@@ -9936,7 +9983,10 @@
         if (!isElementVisible(element)) continue;
         const text = (element.innerText || element.textContent || "").trim();
         const textLower = text.toLowerCase();
-        if (text.length > 10 && (textLower.includes("\uC815\uB2F5") || textLower.includes("correct")) && !textLower.includes("\uC624\uB2F5") && !textLower.includes("incorrect")) {
+        const isWrong = textLower.includes("\uC624\uB2F5") || textLower.includes("incorrect");
+        const looksCorrect = textLower.includes("\uC815\uB2F5") || textLower.includes("correct");
+        const longEnoughToBeExplanation = text.length > 40;
+        if (text.length > 10 && !isWrong && (looksCorrect || longEnoughToBeExplanation)) {
           console.log(`[SAT PDF Exporter] \uD3F4\uBC31: \uD574\uC124 \uD6C4\uBCF4 \uBC1C\uACAC (${selector}): ${text.substring(0, 100)}...`);
           let explanationText = text;
           const correctMatch = text.split(/정답입니다[!]?/i);
@@ -10357,8 +10407,17 @@
       // 클릭 후 대기
       scrollDelay: 150,
       // 스크롤 후 대기
-      pdfDownloadDelay: 300
+      pdfDownloadDelay: 300,
       // PDF 다운로드 간격
+      // 문제 생성 탭: 선지 선택 구간 대기 (너무 빨리 지나가는 것 방지, 특히 사진 있는 문제)
+      beforeChoiceClick: 400,
+      // 선지 클릭 전 대기 (문제/선지 인지 시간)
+      beforeChoiceClickWithImage: 2800,
+      // 이미지 있는 문제: 선지 클릭 전 2.8초 대기
+      afterChoiceClick: 450,
+      // 선지 클릭 후 제출 전 대기
+      afterChoiceClickWithImage: 2800
+      // 이미지 있는 문제: 선지 클릭 후 2.8초 대기
     },
     // 재시도 설정
     retries: {
@@ -12125,6 +12184,11 @@
   // src/flow/moduleRunner.js
   init_deepQuery();
   init_extract();
+  function currentProblemHasImage() {
+    const root = findSatRoot();
+    if (!root) return false;
+    return !!root.querySelector('img, figure, [class*="figure"], [class*="image"], [data-testid*="figure"], [data-testid*="image"]');
+  }
   async function collectModuleProblems(allData, sectionType, moduleName) {
     console.log(`[FLOW] collectModuleProblems start: ${sectionType} ${moduleName}`);
     const moduleNumber = moduleName === "Module 1" ? 1 : 2;
@@ -12154,6 +12218,8 @@
     const seenSignatures = /* @__PURE__ */ new Set();
     let consecutiveDuplicates = 0;
     const maxConsecutiveDuplicates = 3;
+    let consecutiveExtractFailures = 0;
+    const maxExtractRetries = 5;
     let lastProgressState = null;
     while ((TEMP_MODE ? collectedNumbers.size < targetNumbers.size : targetArray.filter((p) => p.module === moduleNumber).length < maxProblems) && (moduleNumber === 2 ? true : consecutiveDuplicates < maxConsecutiveDuplicates)) {
       const isQuestion = isQuestionScreen();
@@ -12295,12 +12361,19 @@
       let correctAnswer = null;
       let explanation = "";
       if (!alreadyGraded) {
+        const hasImage = currentProblemHasImage();
+        const beforeMs = hasImage ? CONFIG.timeouts.beforeChoiceClickWithImage : CONFIG.timeouts.beforeChoiceClick;
+        console.log(`[FLOW] \uC120\uC9C0 \uD074\uB9AD \uC804 \uB300\uAE30 ${beforeMs}ms${hasImage ? " (\uC774\uBBF8\uC9C0 \uC788\uC74C)" : ""}...`);
+        await new Promise((resolve) => setTimeout(resolve, beforeMs));
         console.log(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC911...`);
         const clicked = await clickFirstChoice(sectionType);
         if (!clicked) {
           console.warn(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC2E4\uD328. \uB2E4\uC74C \uBB38\uC81C\uB85C \uC774\uB3D9 \uC2DC\uB3C4.`);
         } else {
           console.log(`[FLOW] \u2713 \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC131\uACF5`);
+          const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
+          console.log(`[FLOW] \uC120\uC9C0 \uD074\uB9AD \uD6C4 \uC81C\uCD9C \uC804 \uB300\uAE30 ${afterMs}ms${hasImage ? " (\uC774\uBBF8\uC9C0 \uC788\uC74C)" : ""}...`);
+          await new Promise((resolve) => setTimeout(resolve, afterMs));
         }
         if (isLastProblem && clicked) {
           console.log(`[FLOW] 27\uBC88: \uC81C\uCD9C \uC804\uC5D0 \uC815\uB2F5 \uCD94\uCD9C (\uD654\uBA74 \uC804\uD658 \uC804)...`);
@@ -12425,7 +12498,11 @@
       let problemExtracted = false;
       if (!problem) {
         console.log(`[FLOW] \uBB38\uC81C \uCD94\uCD9C \uC911...`);
+        fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:beforeExtractCurrentProblem", message: "math image extract debug: before extract", data: { sectionType, currentProblemNum, isLastProblem }, timestamp: Date.now(), hypothesisId: "H5" }) }).catch(() => {
+        });
         problem = await extractCurrentProblem(sectionType);
+        fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:afterExtractCurrentProblem", message: "math image extract debug: after extract", data: { sectionType, currentProblemNum, problemNull: problem === null, figuresLength: problem?.figures?.length ?? "n/a" }, timestamp: Date.now(), hypothesisId: "H1" }) }).catch(() => {
+        });
       } else {
         console.log(`[FLOW] 27\uBC88 \uBB38\uC81C\uB294 \uC774\uBBF8 \uCD94\uCD9C\uD588\uC2B5\uB2C8\uB2E4.`);
         if (isLastProblem && !correctAnswer) {
@@ -12439,6 +12516,7 @@
         }
       }
       if (problem) {
+        consecutiveExtractFailures = 0;
         if (!problem.problemNumber || problem.problemNumber <= 0) {
           if (currentProblemNum > 0) {
             problem.problemNumber = currentProblemNum;
@@ -12517,7 +12595,17 @@
           }
         }
       } else {
-        console.warn(`[FLOW] \uBB38\uC81C \uCD94\uCD9C \uC2E4\uD328. \uD558\uC9C0\uB9CC \uB2E4\uC74C \uBB38\uC81C\uB85C \uC774\uB3D9\uC740 \uC2DC\uB3C4\uD569\uB2C8\uB2E4.`);
+        console.warn(`[FLOW] \uBB38\uC81C \uCD94\uCD9C \uC2E4\uD328. \uB2E4\uC74C \uBB38\uC81C\uB85C \uB118\uC5B4\uAC00\uC9C0 \uC54A\uACE0 \uC7AC\uC2DC\uB3C4\uD569\uB2C8\uB2E4.`);
+      }
+      if (!problem) {
+        consecutiveExtractFailures++;
+        if (consecutiveExtractFailures >= maxExtractRetries) {
+          console.warn(`[FLOW] \uBB38\uC81C \uCD94\uCD9C \uC5F0\uC18D ${maxExtractRetries}\uD68C \uC2E4\uD328. \uC218\uC9D1 \uC885\uB8CC.`);
+          break;
+        }
+        console.log(`[FLOW] \uCD94\uCD9C \uC7AC\uC2DC\uB3C4 \uB300\uAE30 \uD6C4 \uAC19\uC740 \uBB38\uC81C \uB2E4\uC2DC \uC2DC\uB3C4 (${consecutiveExtractFailures}/${maxExtractRetries})...`);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        continue;
       }
       if (problemExtracted && problem) {
         const assignmentProblemNum = problem.problemNumber || currentProblemNum;
@@ -13489,11 +13577,11 @@
         doc.setTextColor(0, 0, 0);
         yPosition += lineHeight;
       }
-      if (problem.explanation) {
-        yPosition += lineHeight * 0.5;
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(80, 80, 80);
+      yPosition += lineHeight * 0.5;
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(80, 80, 80);
+      if (problem.explanation && problem.explanation.trim().length > 0) {
         const explanationText = `Explanation: ${problem.explanation}`;
         const explanationLines = doc.splitTextToSize(explanationText, maxWidth);
         explanationLines.forEach((line) => {
@@ -13506,10 +13594,15 @@
           doc.text(line, margin, yPosition);
           yPosition += lineHeight;
         });
-        doc.setTextColor(0, 0, 0);
-        doc.setFontSize(10);
-        doc.setFont("helvetica", "normal");
+      } else {
+        doc.setFont("helvetica", "italic");
+        doc.setTextColor(128, 128, 128);
+        doc.text("Explanation: [NOT_EXTRACTED]", margin, yPosition);
+        yPosition += lineHeight;
       }
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
       yPosition += sectionSpacing;
     });
     return yPosition;
