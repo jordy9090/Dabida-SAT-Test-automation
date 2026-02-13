@@ -244,7 +244,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
   // 클릭 중복 방지: unique callId 생성
   const callId = `next_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   let clickCount = 0;
-  const MAX_CLICKS_PER_CALL = 1; // 같은 callId에서 최대 1번만 클릭
+  const MAX_CLICKS_PER_CALL = 2; // 같은 callId에서 최대 2번까지 허용 (UI 지연 시 폴백 클릭 허용)
   
   console.log(`[NEXT-DEBUG] clickNextButtonWithFallback 시작 callId=${callId}, beforeProblemNum=${beforeProblemNum}`);
   console.log('[SAT PDF Exporter] [DEBUG] Fail Stage: 다음 버튼 클릭 단계 시작');
@@ -405,7 +405,8 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
     // 클릭 중복 방지: 같은 callId에서 이미 클릭했으면 스킵
     if (clickCount >= MAX_CLICKS_PER_CALL) {
       console.error(`[NEXT-DEBUG] ✗ 클릭 중복 방지: callId=${callId}에서 이미 ${clickCount}번 클릭함 (최대 ${MAX_CLICKS_PER_CALL}번)`);
-      throw new Error(`클릭 중복 방지: callId ${callId}에서 이미 최대 클릭 횟수 도달`);
+      console.warn(`[NEXT-DEBUG] 클릭 한도 도달로 이번 호출을 종료하고 상위 루프에서 재시도합니다. callId=${callId}`);
+      return false;
     }
     
     // 단일 클릭만 수행 (중복 클릭 방지)
@@ -421,7 +422,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
       clickCount++;
       clickPerformed = true;
       console.log(`[NEXT-DEBUG] ✓ Next 버튼 클릭 완료: click() 메서드 사용, callId=${callId}, clickCount=${clickCount}`);
-      await new Promise(resolve => setTimeout(resolve, 10)); // 클릭 후 짧은 대기
+      await new Promise(resolve => setTimeout(resolve, 120)); // 클릭 후 UI 반영 대기(과속 클릭 방지)
     } catch (e) {
       console.warn('[SAT-DEBUG] click() 메서드 실패, dispatchEvent 폴백 시도:', e);
       clickPerformed = false;

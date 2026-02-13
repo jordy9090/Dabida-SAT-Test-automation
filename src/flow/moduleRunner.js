@@ -114,7 +114,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     }
     
     // 문제 번호를 다시 한 번 확인 (DOM이 업데이트되었을 수 있음)
-    await new Promise(resolve => setTimeout(resolve, 15));
+    await new Promise(resolve => setTimeout(resolve, 120));
     const retryProblemNum = getCurrentProblemNumber();
     if (retryProblemNum > 0 && retryProblemNum !== currentProblemNum) {
       console.log(`[FLOW] 문제 번호 재확인: ${currentProblemNum} → ${retryProblemNum}`);
@@ -278,7 +278,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       // BUG FIX: 27번 문제는 제출 전에 정답 추출 (선택지 클릭 시 즉시 채점됨)
       if (isLastProblem && clicked) {
         console.log(`[FLOW] 27번: 제출 전에 정답 추출 (화면 전환 전)...`);
-        await new Promise(resolve => setTimeout(resolve, 15));
+        await new Promise(resolve => setTimeout(resolve, 120));
         correctAnswer = detectCorrectAnswer();
         explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
         if (correctAnswer) {
@@ -339,7 +339,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         
         // 채점 완료 후 정답 표시가 DOM에 완전히 반영될 때까지 추가 대기
         console.log(`[FLOW] 정답 표시 DOM 반영 대기 중...`);
-        await new Promise(resolve => setTimeout(resolve, 15)); // DOM 반영 대기
+        await new Promise(resolve => setTimeout(resolve, 120)); // DOM 반영 대기
         
         // 정답 표시가 실제로 나타났는지 재확인
         let retryCount = 0;
@@ -354,7 +354,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
               break;
             }
           }
-          await new Promise(resolve => setTimeout(resolve, 15));
+          await new Promise(resolve => setTimeout(resolve, 120));
           retryCount++;
         }
         
@@ -378,7 +378,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
           } else {
             console.warn(`[FLOW] ✗ 정답 추출 실패 (채점 직후 시도)`);
             // 추가 대기 후 재시도
-            await new Promise(resolve => setTimeout(resolve, 15));
+            await new Promise(resolve => setTimeout(resolve, 120));
             // #region agent log
             const retryProblemNum = getCurrentProblemNumber();
             fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:retryExtract',message:'retrying answer extraction',data:{currentProblemNum,retryProblemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
@@ -410,7 +410,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         console.log(`[FLOW] 모듈 2 문제 1: 이미 채점 판별했으나 정답 없음. 선택지 클릭 경로 재시도...`);
         const retryClicked = await clickFirstChoice(sectionType);
         if (retryClicked) {
-          await new Promise(resolve => setTimeout(resolve, 30));
+          await new Promise(resolve => setTimeout(resolve, 120));
           correctAnswer = detectCorrectAnswer();
           explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
           if (correctAnswer) {
@@ -653,7 +653,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       await waitForContentLoad(CONFIG.timeouts.screenTransition);
       
       // 문제 번호가 정확히 +1 증가했는지 확인 (여러 번 읽어서 정확도 향상)
-      await new Promise(resolve => setTimeout(resolve, 15)); // DOM 업데이트 대기
+      await new Promise(resolve => setTimeout(resolve, 120)); // DOM 업데이트 대기
       afterProblemNum = getCurrentProblemNumber();
       
       // Progress에서도 확인
@@ -750,7 +750,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       } else if (afterProblemNum <= problemNumBeforeNext) {
         // 문제 번호가 증가하지 않았거나 감소함
         console.warn(`[FLOW] 문제 번호가 증가하지 않음: ${problemNumBeforeNext} → ${afterProblemNum}. 재시도...`);
-        await new Promise(resolve => setTimeout(resolve, 15));
+        await new Promise(resolve => setTimeout(resolve, 120));
         continue;
       }
     }

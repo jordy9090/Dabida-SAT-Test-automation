@@ -18,6 +18,19 @@ Google Gemini의 SAT 문제 풀이 및 해설 인터페이스에서 문제와 �
 4. "압축해제된 확장 프로그램을 로드합니다"를 클릭합니다.
 5. 이 프로젝트 폴더를 선택합니다.
 
+
+
+### 확장 로드 시 `dist/content.js` 오류가 나는 경우
+
+`manifest.json`은 번들 파일 `dist/content.js`를 로드합니다.
+- 이 저장소 최신 코드에는 `dist/content.js`가 포함되어 있어야 합니다.
+- 만약 압축 해제본에 `dist/`가 없으면 프로젝트 폴더에서 아래를 실행한 뒤 다시 로드하세요.
+
+```bash
+npm install
+npm run build
+```
+
 ## 사용 방법
 
 1. [Google Gemini](https://gemini.google.com)에서 SAT 연습 문제 페이지를 엽니다.
