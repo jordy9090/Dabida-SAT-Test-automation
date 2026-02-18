@@ -4,39 +4,79 @@
 
 import { deepQuerySelectorAll, isElementVisible } from './deepQuery.js';
 
+/** Progress 전용 엘리먼트만 사용 (satRoot.innerText regex 오염 방지). root 내부에서만 검색. */
+export function findProgressEl(root = document) {
+  const sels = [
+    '[data-testid="progress-indicator"]',
+    '[data-testid="question-progress"]',
+    'learning-activity-progress',
+    'activity-set [class*="progress"]',
+    'activity-set [aria-label*="/"]',
+    '[class*="progress"]',
+    '[aria-label*="progress"]',
+    '[class*="indicator"]'
+  ];
+  const scope = root && root.querySelector ? root : document;
+  for (const s of sels) {
+    try {
+      const el = scope.querySelector(s);
+      if (el && (el.textContent || '').trim()) return el;
+    } catch (_) {}
+  }
+  return null;
+}
+
+/** Progress 숫자만 progress 엘리먼트의 textContent에서 파싱. root.innerText 사용 금지. */
+export function readProgressNumber(root = document) {
+  const el = findProgressEl(root);
+  if (!el) return null;
+  const t = (el.textContent || '').trim();
+  const m = t.match(/(\d+)\s*\/\s*(\d+)/);
+  if (!m) return null;
+  const cur = Number(m[1]);
+  const total = Number(m[2]);
+  if (cur < 1 || total < 1 || cur > total || (total !== 27 && total !== 22)) return null;
+  return { cur, total, raw: m[0].trim() };
+}
+
+/**
+ * SAT 문제 영역 root — activity-set 고정 (progress+choices 휴리스틱 제거로 9번 점프 방지).
+ * @returns {HTMLElement|null}
+ */
+export function findSatRootStable() {
+  const byActivity = document.querySelector('activity-set') ||
+    document.querySelector('learning-immersive-panel activity-set');
+  if (byActivity) {
+    return byActivity;
+  }
+  const byTestId = document.querySelector('[data-testid="activity-set"]');
+  if (byTestId) return byTestId;
+  const bySat = document.querySelector('[data-testid*="sat"], [data-testid*="question"], [data-testid*="problem"]');
+  if (bySat) return bySat;
+  return null;
+}
+
 /**
  * SAT 문제 영역 root container 찾기
- * progress 텍스트와 choices를 모두 포함하는 가장 작은 ancestor 컨테이너
- * @returns {HTMLElement|null} SAT root container 또는 null
+ * 우선 activity-set 고정, 없으면 기존 휴리스틱 폴백
  */
 export function findSatRoot() {
-  // 방법 1: data-testid로 찾기
-  const testIdRoot = document.querySelector('[data-testid*="sat"], [data-testid*="question"], [data-testid*="problem"]');
-  if (testIdRoot) {
-    console.log('[DIAG] satRoot found by data-testid:', testIdRoot.tagName, testIdRoot.className);
-    return testIdRoot;
+  const stable = findSatRootStable();
+  if (stable) {
+    return stable;
   }
-  
-  // 방법 2: progress 텍스트를 포함하는 가장 작은 컨테이너 찾기
+  // 폴백: progress+choices 공통 조상 (기존 로직)
   const progressElements = deepQuerySelectorAll('[class*="progress"], [aria-label*="progress"], [class*="indicator"]');
   const choicesElements = deepQuerySelectorAll('[role="radio"], [class*="choice"], [class*="option"], button[aria-label*="Choice"]');
-  
-  // progress와 choices를 모두 포함하는 공통 조상 찾기
   for (const progressEl of progressElements) {
     if (!isElementVisible(progressEl)) continue;
-    
-    // progress 텍스트 확인 (예: "1 / 27")
-    const progressText = (progressEl.innerText || progressEl.textContent || '').trim();
+    const progressText = (progressEl.textContent || '').trim();
     if (!/\d+\s*\/\s*\d+/.test(progressText)) continue;
-    
     for (const choiceEl of choicesElements) {
       if (!isElementVisible(choiceEl)) continue;
-      
-      // 공통 조상 찾기
       let commonAncestor = progressEl;
       while (commonAncestor && commonAncestor !== document.body) {
         if (commonAncestor.contains(choiceEl)) {
-          // 가장 작은 컨테이너를 찾기 위해 더 작은 것을 찾음
           const children = Array.from(commonAncestor.children);
           for (const child of children) {
             if (child.contains(progressEl) && child.contains(choiceEl)) {
@@ -44,35 +84,14 @@ export function findSatRoot() {
               break;
             }
           }
-          
-          const rect = commonAncestor.getBoundingClientRect();
-          console.log('[DIAG] satRoot found by progress+choices:', {
-            tag: commonAncestor.tagName,
-            class: commonAncestor.className?.split(' ')[0] || 'none',
-            testid: commonAncestor.getAttribute('data-testid') || 'none',
-            rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-          });
           return commonAncestor;
         }
         commonAncestor = commonAncestor.parentElement;
       }
     }
   }
-  
-  // 방법 3: main 또는 [role="main"] 요소
   const main = document.querySelector('main, [role="main"]');
-  if (main) {
-    const rect = main.getBoundingClientRect();
-    console.log('[DIAG] satRoot found by main:', {
-      tag: main.tagName,
-      class: main.className?.split(' ')[0] || 'none',
-      testid: main.getAttribute('data-testid') || 'none',
-      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-    });
-    return main;
-  }
-  
-  // 방법 4: 최후의 폴백 - body
+  if (main) return main;
   console.warn('[DIAG] satRoot not found, using body as fallback');
   return document.body;
 }

@@ -6,10 +6,11 @@ import { SATNavigator } from '../flow/navigator.js';
 import { SATScraper } from '../flow/stateMachine.js';
 import { PDFGenerator } from '../pdf/pdfGenerator.js';
 import { looksLikeSatQuestionUI, findWorkerFrame } from '../frame/workerFrame.js';
-import { showToast } from '../dom/wait.js';
+import { showToast, setExportRunning } from '../dom/wait.js';
 import { showSetCountModal } from '../dom/modal.js';
 import { GeminiChatAutomator, isGeminiChatPage, isSATTestPage } from '../flow/geminiChat.js';
 import { runSetupSequence } from '../flow/geminiSetup.js';
+import { configureAndStartTest } from '../flow/navigator.js';
 
 /**
  * SATApp 클래스
@@ -320,6 +321,7 @@ export class SATApp {
 
     try {
       this.isProcessing = true;
+      setExportRunning(true);
       console.log('[SATApp] ===== Export to PDF 버튼 클릭됨 =====');
       console.log('[SATApp] 현재 프레임:', window.location.href, 'top?', window === window.top);
 
@@ -327,6 +329,7 @@ export class SATApp {
       if (exportSetCount === null) {
         showToast('PDF 생성이 취소되었습니다.', 'info');
         this.isProcessing = false;
+        setExportRunning(false);
         return;
       }
       
@@ -358,7 +361,7 @@ export class SATApp {
         } catch (e) {
           console.warn('[SATApp] init 재호출 중 오류:', e);
         }
-        await new Promise(resolve => setTimeout(resolve, 600));
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
       // 0. 스크래핑 이전에 Gemini SAT 설정 시퀀스 실행 (시작 버튼/토글 자동 클릭)
@@ -369,7 +372,18 @@ export class SATApp {
         console.warn('[SATApp] 설정 시퀀스 실행 중 오류 (계속 진행):', setupError);
       }
 
-      // 1. Worker 프레임 찾기 (문제 UI가 있는 프레임)
+      // 0-b. 토글 설정 후 '테스트 시작' 버튼 클릭 → 문제 화면 진입 후 프레임 탐색
+      try {
+        console.log('[SATApp] 테스트 시작 버튼 클릭 시도');
+        showToast('테스트 시작 버튼 클릭 중...', 'info');
+        await configureAndStartTest();
+        showToast('문제 화면 로드 대기 중...', 'info');
+        await new Promise(resolve => setTimeout(resolve, 400));
+      } catch (startError) {
+        console.warn('[SATApp] 테스트 시작 처리 중 오류 (계속 진행):', startError);
+      }
+
+      // 1. Worker 프레임 찾기 (문제 UI가 있는 프레임) - 토글+테스트시작 완료 후 실행
       console.log('[FRAME] selectWorkerFrame start');
       // NOTE: showToast is imported from wait.js
       showToast('문제 화면 프레임 찾는 중...', 'info');
@@ -391,6 +405,7 @@ export class SATApp {
           // 현재 프레임에서 직접 실행
           // 1. 자동 진입 시퀀스
           console.log('[SATApp] 자동 진입 시퀀스 시작');
+          console.warn('[NAV_INIT] ★ 호출 위치: content.entry (top, worker 없음·현재가 문제 UI)', window.location.href);
           showToast('자동 진입 시퀀스 실행 중...', 'info');
           await this.navigator.handleInitialNavigation();
           console.log('[SATApp] 자동 진입 시퀀스 완료');
@@ -406,6 +421,7 @@ export class SATApp {
           // 현재 프레임에서 시도
           // 1. 자동 진입 시퀀스
           console.log('[SATApp] 자동 진입 시퀀스 시작');
+          console.warn('[NAV_INIT] ★ 호출 위치: content.entry (top, fallback)', window.location.href);
           showToast('자동 진입 시퀀스 실행 중...', 'info');
           await this.navigator.handleInitialNavigation();
           console.log('[SATApp] 자동 진입 시퀀스 완료');
@@ -459,32 +475,50 @@ export class SATApp {
         throw new Error('추출할 SAT 문제를 찾을 수 없습니다.');
       }
 
-      // 3. PDF 생성
+      // 3. PDF 생성 (Reading 문제지/해설지, Math 문제지/해설지 - 총 4개)
       const totalProblems = allData.reading.length + allData.math.length;
-      showToast(`${totalProblems}개의 문제를 수집했습니다. PDF ${exportSetCount}세트 생성 중...`, 'info');
+      if (!allData.timestamp) allData.timestamp = new Date().toISOString();
+      showToast(`${totalProblems}개의 문제를 수집했습니다. PDF ${exportSetCount}세트(4개/세트) 생성 중...`, 'info');
+
+      const readingCount = (allData.reading || []).length;
+      const mathCount = (allData.math || []).length;
+      const expectedPdfs = (readingCount > 0 ? 2 : 0) + (mathCount > 0 ? 2 : 0);
+      console.log(`[SATApp] PDF 생성 예정: Reading ${readingCount}개 → ${readingCount > 0 ? '문제지+해설지' : '스킵'}, Math ${mathCount}개 → ${mathCount > 0 ? '문제지+해설지' : '스킵'} (총 ${expectedPdfs}개)`);
 
       for (let i = 1; i <= exportSetCount; i += 1) {
-        showToast(`문제지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
-        const problemDoc = this.pdfGenerator.generateProblemsPDF(allData);
+        showToast(`Reading 문제지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        const readingProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, 'reading');
+        showToast(`Reading 해설지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        const readingAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, 'reading');
+        showToast(`Math 문제지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        const mathProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, 'math');
+        showToast(`Math 해설지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        const mathAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, 'math');
 
-        showToast(`해설지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
-        const answerDoc = this.pdfGenerator.generateAnswersPDF(allData);
+        const nullCount = [readingProblemsDoc, readingAnswersDoc, mathProblemsDoc, mathAnswersDoc].filter(d => d == null).length;
+        if (nullCount > 0) {
+          console.warn(`[SATApp] null PDF ${nullCount}개 (읽기:${readingCount}개, 수학:${mathCount}개) - 문제가 없는 섹션은 PDF 미생성`);
+        }
 
-        // 4. PDF 다운로드
-        await this.pdfGenerator.downloadPDFs(problemDoc, answerDoc, {
-          copyIndex: i,
-          totalCopies: exportSetCount
-        });
+        // 4. PDF 4개 다운로드
+        await this.pdfGenerator.downloadFourPDFs(
+          readingProblemsDoc,
+          readingAnswersDoc,
+          mathProblemsDoc,
+          mathAnswersDoc,
+          { copyIndex: i, totalCopies: exportSetCount }
+        );
       }
 
       // 성공 메시지
-      showToast(`PDF ${exportSetCount}세트가 성공적으로 생성되었습니다!`, 'success');
+      showToast(`PDF ${exportSetCount}세트(총 ${exportSetCount * 4}개)가 성공적으로 생성되었습니다!`, 'success');
       button.textContent = '✓ Exported!';
       setTimeout(() => {
         button.textContent = 'Export to PDF';
         button.disabled = false;
         button.classList.remove('loading');
         this.isProcessing = false;
+        setExportRunning(false);
       }, 2000);
 
     } catch (error) {
@@ -502,6 +536,7 @@ export class SATApp {
       button.classList.remove('loading');
       button.textContent = 'Export to PDF';
       this.isProcessing = false;
+      setExportRunning(false);
     }
   }
 }

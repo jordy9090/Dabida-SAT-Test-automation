@@ -2,7 +2,7 @@
 // NOTE: Logic must remain identical to original implementation.
 
 import { deepQuerySelectorAll, isElementVisible } from './deepQuery.js';
-import { findSatRoot } from './query.js';
+import { findSatRoot, readProgressNumber } from './query.js';
 
 // ============================================================================
 // Figure 추출 유틸리티 함수들
@@ -465,6 +465,24 @@ export async function extractFigures(satRoot) {
 export { findSatRoot } from './query.js';
 
 /**
+ * 선지가 실제로 선택된 상태인지 DOM으로 확인 (클릭 성공 검증용)
+ * 리딩 이미지 문제에서 도표/갤러리 내 selected·checked는 제외하고, 실제 선지(radio/option)만 검사
+ * @returns {boolean}
+ */
+export function hasAnyChoiceSelected() {
+  const satRoot = findSatRoot();
+  if (!satRoot) return false;
+  const candidates = satRoot.querySelectorAll(
+    '[role="radio"][aria-checked="true"], [role="option"][aria-selected="true"]'
+  );
+  for (const el of candidates) {
+    if (el.closest('figure, [class*="figure"], [class*="image"], [data-testid*="figure"], [data-testid*="image"]')) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
  * Module Start Screen 판별 (모듈 2 시작 전 전환 화면)
  * - Progress UI 없음, 선택지 없음
  * - "다음: Reading and Writing 모듈 2" 또는 "모듈 2 시작" 버튼
@@ -614,34 +632,600 @@ export function detectCurrentSection() {
   return 'unknown';
 }
 
-// 선택지 추출
-// 선택지 추출 - 수정: 클릭 가능한 요소에서만 추출 (A-D만)
+// 스크롤 가능한 부모 찾기 (buttons.js 로직과 동일)
+function getScrollableParent(el) {
+  let p = el && el.parentElement;
+  while (p) {
+    try {
+      const style = window.getComputedStyle(p);
+      if (/(auto|scroll|overlay)/.test(style.overflowY || '') && p.scrollHeight > p.clientHeight) return p;
+    } catch (_) {}
+    p = p.parentElement;
+  }
+  return null;
+}
+
+/** 문서 상태 로그용 (프레임/타이밍 원인 확정). */
+export function describeDoc(doc) {
+  if (!doc) return { href: undefined, title: undefined, ready: undefined, hasNext: false, hasActivitySet: false, hasScroll: false, hasChoices: false };
+  return {
+    href: doc.location?.href,
+    title: doc.title,
+    ready: doc.readyState,
+    hasNext: !!doc.querySelector?.('[data-test-id="next-button"]'),
+    hasActivitySet: !!doc.querySelector?.('activity-set'),
+    hasScroll: !!doc.querySelector?.('.scroll-container'),
+    hasChoices: !!doc.querySelector?.('mat-action-list.choices-container')
+  };
+}
+
+/** next 탐색 통일: 현재 document만, 타이밍 대응 polling. 호출 시점마다 [NEXT-CTX]/[NEXT-FOUND]/[NEXT-NOTFOUND] 로그. */
+export async function getNextButtonStrict(timeoutMs = 5000) {
+  const t0 = Date.now();
+  const isTop = typeof window !== 'undefined' && window.top === window;
+  console.log('[NEXT-CTX]', { isTop, href: location.href, ready: document.readyState });
+
+  while (Date.now() - t0 < timeoutMs) {
+    const next = document.querySelector('[data-test-id="next-button"]');
+    if (next) {
+      console.log('[NEXT-FOUND]', { dt: Date.now() - t0, doc: describeDoc(document), html: next.outerHTML.slice(0, 140) });
+      return next;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  console.log('[NEXT-NOTFOUND]', { dt: Date.now() - t0, doc: describeDoc(document) });
+  const err = Object.assign(new Error('NEXT_NOT_FOUND'), { code: 'NEXT_NOT_FOUND', doc: describeDoc(document) });
+  throw err;
+}
+
+/** getNextButtonStrict + root 파생. next 탐색은 getNextButtonStrict()만 사용. */
+export async function getRootFromNextButtonAsync(timeoutMs = 5000) {
+  const next = await getNextButtonStrict(timeoutMs);
+  const root = next.closest('activity-set') || next.closest('main') || (next.ownerDocument && next.ownerDocument.body) || document.body;
+  return { root, next };
+}
+
+/** root만 필요하고 fallback 허용할 때 (PDF·extractCurrentProblem 등). next 없으면 findSatRoot. */
+export async function getRootForExtract(timeoutMs = 2000) {
+  try {
+    const next = await getNextButtonStrict(timeoutMs);
+    return next.closest('activity-set') || next.closest('main') || (next.ownerDocument && next.ownerDocument.body) || document.body;
+  } catch (_) {
+    return findSatRoot();
+  }
+}
+
+/** root: document.querySelector('activity-set') 로 통일. (모든 query/choices/clickFirstChoice 동일 root) */
+export function getSatRootForChoices() {
+  return document.querySelector('activity-set') || document.body;
+}
+
+/** scroll 이벤트 dispatch + scrollend(있으면) + 200ms 대기 */
+function dispatchScrollAndWait(scroller) {
+  scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+  try { scroller.dispatchEvent(new Event('scrollend', { bubbles: true })); } catch (_) {}
+  return new Promise(r => setTimeout(r, 200));
+}
+
+/** scrollScanForChoices용: .scroll-container 찾기 */
+function getPreferredScrollContainer(container) {
+  const el = (container && container.querySelector && container.querySelector('.scroll-container')) || document.querySelector('activity-set .scroll-container') || document.querySelector('.scroll-container');
+  return el || null;
+}
+
+/** satRoot 내부 스크롤 가능 컨테이너 목록. .scroll-container 있으면 최우선, 그 다음 overflow+중앙/가시 정렬. */
+function findScrollContainerCandidates(satRoot) {
+  if (!satRoot || !satRoot.querySelectorAll) return [];
+  const preferred = getPreferredScrollContainer(satRoot);
+  if (preferred) {
+    console.log('[CHOICE-VIS] scroll-container 사용 (.scroll-container)');
+  }
+  const scrollables = [];
+  try {
+    const candidates = satRoot.querySelectorAll('*');
+    for (const el of candidates) {
+      if (el === preferred) continue;
+      try {
+        const style = window.getComputedStyle(el);
+        const overflowOk = /(auto|scroll|overlay)/.test(style.overflowY || '') || (el.classList && el.classList.contains('scroll-container'));
+        if (!overflowOk) continue;
+        const scrollableHeight = el.scrollHeight - el.clientHeight;
+        if (scrollableHeight < 50) continue;
+        const rect = el.getBoundingClientRect();
+        const centerY = rect.top + rect.height / 2;
+        const viewportCenter = typeof window !== 'undefined' ? window.innerHeight / 2 : 400;
+        const distanceFromCenter = Math.abs(centerY - viewportCenter);
+        const visibilityScore = Math.max(0, rect.height - Math.max(0, -rect.top) - Math.max(0, rect.bottom - (window.innerHeight || 800)));
+        scrollables.push({
+          el,
+          scrollableHeight,
+          distanceFromCenter,
+          visibilityScore: visibilityScore + (rect.height > 0 ? 1 : 0)
+        });
+      } catch (_) {}
+    }
+  } catch (_) {}
+  scrollables.sort((a, b) => {
+    if (a.distanceFromCenter !== b.distanceFromCenter) return a.distanceFromCenter - b.distanceFromCenter;
+    if (b.visibilityScore !== a.visibilityScore) return b.visibilityScore - a.visibilityScore;
+    return b.scrollableHeight - a.scrollableHeight;
+  });
+  const list = scrollables.map(s => s.el);
+  if (preferred) return [preferred, ...list];
+  return list;
+}
+
+function findScrollContainer(satRoot) {
+  const list = findScrollContainerCandidates(satRoot);
+  return list.length > 0 ? list[0] : null;
+}
+
+/** 선지 후보 — DOM 존재만 (가시성 필터 없음). SAT UI: mat-action-list.choices-container 내 button.mat-mdc-list-item.option */
+function getChoiceCandidates(container) {
+  const sels = [
+    'mat-action-list.choices-container button.option',
+    'mat-action-list button.mat-mdc-list-item.option',
+    '.choices-container button.option',
+    'button.mat-mdc-list-item.option',
+    '[role="radio"]',
+    'button[aria-label*="Choice"]',
+    'mat-list-option',
+    '[role="option"]',
+    '.option',
+    '[class*="option"]',
+    '.mat-mdc-list-item'
+  ];
+  const set = new Set();
+  for (const s of sels) {
+    try {
+      const nodes = deepQuerySelectorAll(s, container);
+      nodes.forEach(el => { if (!el.disabled && container.contains(el)) set.add(el); });
+    } catch (_) {}
+  }
+  return Array.from(set);
+}
+
+/** 앵커 없이 스크롤만으로 선지 4개 이상. Angular virtual scroll 대응: scroll 이벤트 dispatch + 200ms 대기. */
+export async function scrollScanForChoices(container, maxSteps = 12) {
+  const candidates = findScrollContainerCandidates(container);
+  const count = () => { try { return extractChoices(container).length; } catch (_) { return 0; } };
+  if (candidates.length === 0) {
+    console.warn('[CHOICE-VIS] scrollScanForChoices: 스크롤 컨테이너 없음');
+    return count() >= 4;
+  }
+  for (const sc of candidates) {
+    let stepsWithoutMove = 0;
+    for (let i = 0; i < maxSteps; i++) {
+      const choicesCount = count();
+      if (choicesCount >= 4) {
+        console.log(`[CHOICE-VIS] scrollScanForChoices: 스크롤 성공, choices ${choicesCount}개`);
+        return true;
+      }
+      const before = sc.scrollTop;
+      const delta = Math.floor(sc.clientHeight * 0.8);
+      sc.scrollTop = Math.min(before + delta, sc.scrollHeight);
+      sc.dispatchEvent(new Event('scroll'));
+      await new Promise(r => setTimeout(r, 200));
+      const after = sc.scrollTop;
+      if (after === before) {
+        stepsWithoutMove++;
+        if (stepsWithoutMove >= 2) {
+          console.log('[CHOICE-VIS] scrollScanForChoices: scrollTop 변화 없음 → 다음 컨테이너 시도');
+          break;
+        }
+      } else {
+        stepsWithoutMove = 0;
+      }
+    }
+  }
+  const final = count();
+  console.log(`[CHOICE-VIS] scrollScanForChoices: ${maxSteps}단계 후 choices ${final}개`);
+  return final >= 4;
+}
+
+/** 정답 옵션 검색과 동일한 셀렉터로 옵션 후보 수집 (SAT UI: mat-action-list 내 button.option). 반환: { element, letter }[] */
+function getOptionCandidatesForAnchor(container) {
+  const optionSelectors = [
+    'mat-action-list.choices-container button.option',
+    'mat-action-list button.mat-mdc-list-item.option',
+    '.choices-container button.option',
+    'button.mat-mdc-list-item.option',
+    '[role="radio"]',
+    'button[aria-label*="Choice"]',
+    '.option',
+    '[class*="option"]',
+    '.mat-mdc-list-item'
+  ];
+  const seen = new Set();
+  const elements = [];
+  for (const sel of optionSelectors) {
+    try {
+      const nodes = deepQuerySelectorAll(sel, container);
+      for (const el of nodes) {
+        if (seen.has(el)) continue;
+        try {
+          if (el.disabled) continue;
+          if (!isElementVisible(el) || !container.contains(el)) continue;
+          seen.add(el);
+          elements.push(el);
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  const result = [];
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    const text = (el.innerText || el.textContent || '').trim();
+    const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+    let letter = null;
+    const ariaMatch = ariaLabel.match(/choice\s*([A-D])/i) || ariaLabel.match(/^([A-D])[\.\)]?/i);
+    if (ariaMatch) letter = ariaMatch[1].toUpperCase();
+    if (!letter && text.match(/^([A-D])[\.\)]\s*/)) letter = text.match(/^([A-D])[\.\)]\s*/)[1].toUpperCase();
+    if (!letter && i < 4) letter = String.fromCharCode(65 + i);
+    if (letter && letter >= 'A' && letter <= 'D') result.push({ element: el, letter });
+  }
+  return result;
+}
+
+/** 선지 앵커 후보: (1) radio input 래퍼, (2) 없으면 option-candidates 첫 요소의 클릭 단위 래퍼 */
+function getChoiceAnchors(container) {
+  let anchorEl = null;
+  try {
+    const inputs = deepQuerySelectorAll('input[type=radio]', container);
+    const firstInput = inputs.find(inp => !inp.disabled);
+    if (firstInput) {
+      anchorEl = firstInput.closest('.mat-mdc-radio-button, .mat-radio-button, mat-list-option, [role="radio"], label') || firstInput;
+    }
+  } catch (_) {}
+  if (anchorEl) return [anchorEl];
+  const optionCandidates = getOptionCandidatesForAnchor(container);
+  if (optionCandidates.length === 0) return [];
+  const first = optionCandidates[0].element;
+  const wrapper = first.closest('mat-list-option, [role=option], button, .mat-mdc-list-item, .mat-mdc-radio-button, [role=radio], label') || first;
+  return [wrapper];
+}
+
+function waitFrames(n = 2) {
+  return new Promise(r => {
+    let count = 0;
+    function tick() {
+      requestAnimationFrame(() => { count++; if (count >= n) r(); else tick(); });
+    }
+    tick();
+  });
+}
+
+/** scrollParent 컨텍스트에서 anchorEl이 뷰포트 중앙으로 오도록 스크롤 */
+function scrollIntoViewWithinParent(anchorEl, scrollParent) {
+  if (!anchorEl) return;
+  if (!scrollParent || scrollParent === document.body) {
+    anchorEl.scrollIntoView({ block: 'center', inline: 'nearest' });
+    return;
+  }
+  const er = anchorEl.getBoundingClientRect();
+  const pr = scrollParent.getBoundingClientRect();
+  const delta = (er.top + er.height / 2) - (pr.top + pr.height / 2);
+  scrollParent.scrollTop += delta;
+}
+
+/** 가시성 + 클릭가능성: viewportRect 안에 있고 elementFromPoint(cx,cy)가 anchor/choice 계열인지 */
+function isVisibleAndClickable(anchorEl, viewportRect) {
+  if (!anchorEl || !anchorEl.getBoundingClientRect) return false;
+  const rect = anchorEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  if (cx < viewportRect.left || cx > viewportRect.right || cy < viewportRect.top || cy > viewportRect.bottom) return false;
+  const topEl = document.elementFromPoint(cx, cy);
+  if (!topEl) return false;
+  if (topEl === anchorEl || anchorEl.contains(topEl) || topEl.contains(anchorEl)) return true;
+  const choiceLike = topEl.closest('input[type=radio], [role=radio], .mat-mdc-radio-button, mat-list-option');
+  if (choiceLike && (anchorEl.contains(choiceLike) || choiceLike.contains(anchorEl))) return true;
+  return false;
+}
+
+const CHOICE_VIS_WAIT_MS = 80;
+const CHOICE_VIS_MAX_ITER = 20;
+
+/**
+ * 성공 판정 = root.querySelectorAll(BTN_SEL).length >= 4. 선지 4개 미만일 때만 스크롤/가시화 실행.
+ */
+export async function ensureChoicesVisible(opts) {
+  const { root: optsRoot } = opts || {};
+  const root = optsRoot && optsRoot.querySelector ? optsRoot : getSatRootForChoices();
+  const getCount = () => {
+    try {
+      return root.querySelectorAll('mat-action-list.choices-container button').length;
+    } catch (_) {
+      return 0;
+    }
+  };
+
+  if (getCount() >= 4) return;
+
+  const wait = () => new Promise((r) => setTimeout(r, CHOICE_VIS_WAIT_MS));
+  const hasChoicesContainer = () => !!root.querySelector('mat-action-list.choices-container');
+  const choicesContainer = () => root.querySelector('mat-action-list.choices-container');
+  const firstOption = () =>
+    root.querySelector('mat-action-list.choices-container button') ||
+    root.querySelector('.choices-container button');
+  const nextBtn = () => root.querySelector('button[data-test-id="next-button"]');
+  const getChoiceNodes = () => root.querySelectorAll('mat-action-list.choices-container button');
+
+  // [STEP 1] scrollIntoView — 4개 미만일 때만
+  for (let iter = 0; iter < CHOICE_VIS_MAX_ITER; iter++) {
+    const count = getCount();
+    console.log('[CHOICE-VIS]', { iter, step: 1, count, hasChoicesContainer: hasChoicesContainer() });
+    if (count >= 4) return;
+    const choices = getChoiceNodes();
+    const target =
+      (choices[0] || choicesContainer() || firstOption() || nextBtn() || root);
+    target.scrollIntoView({ block: 'center', inline: 'nearest' });
+    await wait();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    if (getCount() >= 4) return;
+  }
+
+  // [STEP 2] 키보드 PageDown / Space / ArrowDown
+  const focusTarget = document.querySelector('activity-set') || document.body;
+  try {
+    if (typeof focusTarget.focus === 'function') {
+      if (!focusTarget.hasAttribute('tabindex')) focusTarget.setAttribute('tabindex', '-1');
+      focusTarget.focus();
+    }
+  } catch (_) {}
+  const keys = [
+    { key: 'PageDown', code: 'PageDown' },
+    { key: ' ', code: 'Space' },
+    { key: 'ArrowDown', code: 'ArrowDown' }
+  ];
+  for (let iter = 0; iter < CHOICE_VIS_MAX_ITER; iter++) {
+    const count = getCount();
+    console.log('[CHOICE-VIS]', { iter, step: 2, count, hasChoicesContainer: hasChoicesContainer() });
+    if (count >= 4) return;
+    for (const { key, code } of keys) {
+      focusTarget.dispatchEvent(new KeyboardEvent('keydown', { key, code, bubbles: true, cancelable: true }));
+      focusTarget.dispatchEvent(new KeyboardEvent('keyup', { key, code, bubbles: true, cancelable: true }));
+      await wait();
+      if (getCount() >= 4) return;
+    }
+  }
+
+  // [STEP 3] WheelEvent on window + scrollingElement.scrollBy
+  for (let iter = 0; iter < CHOICE_VIS_MAX_ITER; iter++) {
+    const count = getCount();
+    console.log('[CHOICE-VIS]', { iter, step: 3, count, hasChoicesContainer: hasChoicesContainer() });
+    if (count >= 4) return;
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: 800, bubbles: true, cancelable: true }));
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollBy(0, 800);
+    }
+    await wait();
+  }
+
+  const err = new Error('CHOICES_NOT_FOUND');
+  err.code = 'CHOICES_NOT_FOUND';
+  throw err;
+}
+
+/** 스크롤 후 선지 마운트 (fold 아래/가상화 대응). container 내부 옵션이 2개 미만이면 스크롤 반복. */
+export async function ensureChoicesPresent(container) {
+  const optionSel = '.mat-mdc-radio-button, .mat-radio-button, mat-list-option, [role="radio"], [role="option"], input[type="radio"], .mat-mdc-list-item, .option';
+  let rawCount = 0;
+  try {
+    rawCount = deepQuerySelectorAll(optionSel, container).length;
+  } catch (_) {}
+  console.log('[CHOICE-EXTRACT] raw option candidates before scroll:', rawCount);
+  const parent = getScrollableParent(container) || findSatRoot() || container;
+  let count = rawCount;
+  for (let i = 0; i < 7 && count < 2; i++) {
+    if (parent && parent.scrollHeight > parent.clientHeight) {
+      parent.scrollTop += parent.clientHeight * 0.8;
+      await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(r)); });
+      await new Promise(r => setTimeout(r, 80));
+      try {
+        count = deepQuerySelectorAll(optionSel, container).length;
+      } catch (_) {}
+      console.log('[CHOICE-EXTRACT] scroll attempt', i + 1, 'raw count:', count, 'parent:', { scrollTop: parent.scrollTop, scrollHeight: parent.scrollHeight, clientHeight: parent.clientHeight });
+      if (count >= 2) break;
+    }
+  }
+  return count;
+}
+
+/** 선지 셀렉터 고정. root 기준만 사용, document.body 금지. */
+/** 1순위: class 필터 없음. activity-set 내 choices-container 내 모든 button. */
+const BTN_SEL = 'mat-action-list.choices-container button';
+export const SEL_OPTION = 'mat-action-list.choices-container button.mat-mdc-list-item.option, button.mat-mdc-list-item.option';
+
+/**
+ * 선택지 추출 — 입력 root만 사용 (순수 함수). document/findSatRoot/body 금지.
+ */
 export function extractChoices(container) {
-  // FRAME GUARD: DOM 작업은 worker frame에서만 실행
-  if (window !== window.top && !window.__SAT_IS_WORKER) {
-    console.warn('[SAT-DEBUG] [extractChoices] Worker frame이 아닌 iframe에서 실행 시도 - 스킵');
+  const root = container;
+  if (!root || !root.querySelectorAll) {
+    const err = new Error('extractChoices requires root (no document.body)');
+    err.code = 'NO_ROOT';
+    throw err;
+  }
+  console.log('[EXTRACT-CTX]', {
+    href: typeof location !== 'undefined' ? location.href : '',
+    isTop: typeof window !== 'undefined' && window.top === window,
+    hasActivitySet: typeof document !== 'undefined' && !!document.querySelector('activity-set'),
+    rootTag: root?.tagName,
+    rootHasChoices: !!root?.querySelector?.('mat-action-list.choices-container'),
+    rootDirect: root?.querySelectorAll?.('mat-action-list.choices-container button')?.length ?? 0,
+    rootOption: root?.querySelectorAll?.('mat-action-list.choices-container button.mat-mdc-list-item.option')?.length ?? 0
+  });
+  const buttons = root.querySelectorAll(BTN_SEL);
+  if (buttons.length >= 4) {
+    console.log('[CHOICES-DIRECT]', buttons.length, buttons[0]?.outerHTML?.slice(0, 120));
+    const list = Array.from(buttons).slice(0, 8).sort((a, b) => {
+      try { return (a.getBoundingClientRect().top) - (b.getBoundingClientRect().top); } catch (_) { return 0; }
+    });
+    const result = [];
+    for (let i = 0; i < 4; i++) {
+      const el = list[i];
+      const L = ['A', 'B', 'C', 'D'][i];
+      const raw = (el.innerText || el.textContent || '').trim();
+      const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim() || raw;
+      result.push({ label: L, text, element: el, priority: -2, source: 'sat-ui' });
+    }
+    return result;
+  }
+
+  let nodes = [];
+  try {
+    nodes = root.querySelectorAll(SEL_OPTION);
+  } catch (_) {}
+  if (nodes.length < 4) {
+    const err = new Error('CHOICES_NOT_FOUND');
+    err.code = 'CHOICES_NOT_FOUND';
+    throw err;
+  }
+  const list = Array.from(nodes).slice(0, 8).sort((a, b) => {
+    try { return (a.getBoundingClientRect().top) - (b.getBoundingClientRect().top); } catch (_) { return 0; }
+  });
+  const seen = new Set();
+  const result = [];
+  for (let i = 0; i < list.length && result.length < 4; i++) {
+    const el = list[i];
+    const prefixEl = el && el.querySelector ? el.querySelector('.option-prefix') : null;
+    const letter = prefixEl ? (prefixEl.textContent || '').trim().replace(/[\.\)]/g, '').trim().slice(0, 1).toUpperCase() : ['A', 'B', 'C', 'D'][result.length];
+    const L = (letter >= 'A' && letter <= 'D') ? letter : ['A', 'B', 'C', 'D'][result.length];
+    if (seen.has(L)) continue;
+    seen.add(L);
+    const raw = (el.innerText || el.textContent || '').trim();
+    const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim() || raw;
+    result.push({ label: L, text, element: el, priority: -2, source: 'sat-ui' });
+  }
+  if (result.length < 4) {
+    const err = new Error('CHOICES_NOT_FOUND');
+    err.code = 'CHOICES_NOT_FOUND';
+    throw err;
+  }
+  return result;
+}
+
+/** root 없거나 4개 미만이면 [] 반환 (throw 안 함). PDF/추출 등 비게이트 경로용. */
+export function extractChoicesSafe(container) {
+  if (!container || !container.querySelectorAll) return [];
+  try {
+    return extractChoices(container);
+  } catch (_) {
     return [];
   }
-  
+}
+
+/** 레거시/폴백용: container 없을 때만 사용. 4개 미만이면 throw하지 않고 빈 배열 또는 소량 반환. */
+function extractChoicesLegacy(container) {
+  const root = container || document.body;
   const choices = [];
-  
+  const candidates = [];
+  let rawCandidates = 0;
+  try {
+    rawCandidates = deepQuerySelectorAll('.mat-mdc-radio-button, [role="radio"], input[type="radio"], mat-list-option', container).length;
+  } catch (_) {}
+  console.log('[CHOICE-EXTRACT] raw option candidates:', rawCandidates);
+
+  // DOM 존재 기준 수집 (가시성 필터 없음) — 스크롤 밖 선지도 포함, 클릭 시 scrollIntoView
+  const domOnlyEls = getChoiceCandidates(container);
+  if (domOnlyEls.length >= 2) {
+    domOnlyEls.sort((a, b) => {
+      try { return (a.getBoundingClientRect?.()?.top ?? 0) - (b.getBoundingClientRect?.()?.top ?? 0); } catch (_) { return 0; }
+    });
+    const seenLabels = new Set();
+    for (let i = 0; i < domOnlyEls.length; i++) {
+      const el = domOnlyEls[i];
+      const text = (el.innerText || el.textContent || '').trim();
+      const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+      let letter = null;
+      const ariaMatch = ariaLabel.match(/choice\s*([A-D])/i) || ariaLabel.match(/^([A-D])[\.\)]?/i);
+      if (ariaMatch) letter = ariaMatch[1].toUpperCase();
+      if (!letter && text.match(/^([A-D])[\.\)]\s*/)) letter = text.match(/^([A-D])[\.\)]\s*/)[1].toUpperCase();
+      if (!letter && i < 4) letter = String.fromCharCode(65 + i);
+      if (letter && letter >= 'A' && letter <= 'D' && !seenLabels.has(letter)) {
+        seenLabels.add(letter);
+        candidates.push({ label: letter, text: extractOptionText(el), element: el, priority: -1, source: 'dom-only' });
+      }
+    }
+    if (candidates.length >= 2) {
+      console.log(`[SAT-DEBUG] [extractChoices] DOM 존재 기준 후보: ${candidates.length}개 (가시성 무관)`);
+    }
+  }
+
+  function extractLetterFromEl(el, idx) {
+    const t = ((el && (el.innerText || el.textContent)) || '').trim();
+    const m = t.match(/^\s*([A-D])\s*[\.\)]/);
+    if (m) return m[1].toUpperCase();
+    return ['A', 'B', 'C', 'D'][idx] ?? null;
+  }
+  function extractOptionText(el) {
+    const raw = ((el && (el.innerText || el.textContent)) || '').trim();
+    const cleaned = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim();
+    if (cleaned) return cleaned;
+    const aria = (el && el.getAttribute && el.getAttribute('aria-label')) || '';
+    if (aria.trim()) return aria.trim();
+    const labelledBy = (el && el.getAttribute && el.getAttribute('aria-labelledby')) || '';
+    if (labelledBy && el.ownerDocument) {
+      const ref = el.ownerDocument.getElementById(labelledBy.split(/\s+/)[0]);
+      if (ref) return (ref.innerText || ref.textContent || '').trim() || '선택지';
+    }
+    return '선택지';
+  }
+
+  // Priority 0: class 기반 (SAT UI: mat-action-list.choices-container 내 button.option / mat-mdc-list-item)
+  const optionSelectors = 'mat-action-list button.option, .choices-container button.option, button.mat-mdc-list-item.option, .option, mat-list-option, .mat-mdc-list-item, .mat-mdc-radio-button, .mat-radio-button, [class*="list-item"][class*="option"], [class*="option"]';
+  let optionEls = [];
+  try {
+    optionEls = deepQuerySelectorAll(optionSelectors, container);
+  } catch (e) {
+    optionEls = [];
+  }
+  function isNotHidden(el) {
+    if (!el) return false;
+    try {
+      const s = window.getComputedStyle(el);
+      return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+    } catch (_) { return true; }
+  }
+  optionEls = optionEls.filter(el => !el.disabled && isNotHidden(el));
+  if (optionEls.length >= 2) {
+    optionEls.sort((a, b) => {
+      try {
+        return (a.getBoundingClientRect().top) - (b.getBoundingClientRect().top);
+      } catch (_) { return 0; }
+    });
+    const existingLabels = new Set();
+    optionEls.forEach((el, idx) => {
+      const letter = extractLetterFromEl(el, idx);
+      if (!letter || letter < 'A' || letter > 'D') return;
+      if (existingLabels.has(letter)) return;
+      existingLabels.add(letter);
+      candidates.push({
+        label: letter,
+        text: extractOptionText(el),
+        element: el,
+        priority: 0,
+        source: 'class-based option'
+      });
+    });
+    console.log(`[SAT-DEBUG] [extractChoices] Priority 0 (class 기반 option): ${optionEls.length}개 중 ${candidates.length}개 후보`);
+  }
+
   // ============================================================================
   // ACCESSIBILITY-BASED CHOICE EXTRACTION
-  // Priority order:
-  // 1. role="radio"
-  // 2. input[type="radio"] + label
-  // 3. elements with aria-checked / aria-selected
-  // 4. role="option"
+  // Priority order: 0(class) → 1. role="radio" → 2. input radio → 3. aria-checked → 4. role="option"
   // ============================================================================
   
-  const candidates = [];
-  
-  // Priority 1: role="radio"
+  // Priority 1: role="radio" (후보 4개 미만일 때만)
+  if (candidates.length < 4) {
   const radioElements = deepQuerySelectorAll('[role="radio"]', container);
-  console.log(`[SAT-DEBUG] [extractChoices] Priority 1 (role="radio"): ${radioElements.length}개 발견`);
+  const radioVisibleCount = radioElements.filter(el => !el.disabled && isNotHidden(el)).length;
+  console.log(`[CHOICE-EXTRACT] Priority 1 role=radio: ${radioElements.length}개 (notHidden=${radioVisibleCount})`);
   
   for (const el of radioElements) {
-    if (!isElementVisible(el) || el.disabled) continue;
+    if (el.disabled) continue;
     
     const text = (el.innerText || el.textContent || '').trim();
     const ariaLabel = (el.getAttribute('aria-label') || '').trim();
@@ -691,6 +1275,7 @@ export function extractChoices(container) {
       }
     }
   }
+  }
   
   // Priority 2: input[type="radio"] + label
   if (candidates.length < 4) {
@@ -698,7 +1283,7 @@ export function extractChoices(container) {
     console.log(`[SAT-DEBUG] [extractChoices] Priority 2 (input[type="radio"]): ${radioInputs.length}개 발견`);
     
     for (const input of radioInputs) {
-      if (!isElementVisible(input) || input.disabled) continue;
+      if (input.disabled) continue;
       
       // label 찾기
       let labelEl = null;
@@ -754,7 +1339,7 @@ export function extractChoices(container) {
     console.log(`[SAT-DEBUG] [extractChoices] Priority 3 (aria-checked/selected): ${ariaCheckedElements.length}개 발견`);
     
     for (const el of ariaCheckedElements) {
-      if (!isElementVisible(el) || el.disabled) continue;
+      if (el.disabled) continue;
       
       // 이미 후보에 포함되어 있으면 스킵
       if (candidates.find(c => c.element === el)) continue;
@@ -798,7 +1383,7 @@ export function extractChoices(container) {
     console.log(`[SAT-DEBUG] [extractChoices] Priority 4 (role="option"): ${optionElements.length}개 발견`);
     
     for (const el of optionElements) {
-      if (!isElementVisible(el) || el.disabled) continue;
+      if (el.disabled) continue;
       
       // 이미 후보에 포함되어 있으면 스킵
       if (candidates.find(c => c.element === el)) continue;
@@ -835,27 +1420,63 @@ export function extractChoices(container) {
       }
     }
   }
-  
-  // Priority로 정렬 (낮은 숫자가 우선)
+
+  // Priority 4.5: 정답 옵션과 동일 셀렉터, DOM 존재만 (가시성 필터 없음 — 화면 밖 선지 포함)
+  if (candidates.length < 4) {
+    const domOnlyOptionEls = getChoiceCandidates(container);
+    console.log(`[SAT-DEBUG] [extractChoices] Priority 4.5 (option-candidates DOM만): ${domOnlyOptionEls.length}개`);
+    const seenLetters = new Set(candidates.map(c => c.label));
+    domOnlyOptionEls.sort((a, b) => {
+      try { return (a.getBoundingClientRect?.()?.top ?? 0) - (b.getBoundingClientRect?.()?.top ?? 0); } catch (_) { return 0; }
+    });
+    for (let i = 0; i < domOnlyOptionEls.length; i++) {
+      const el = domOnlyOptionEls[i];
+      if (candidates.find(c => c.element === el)) continue;
+      const text = (el.innerText || el.textContent || '').trim();
+      const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+      let letter = null;
+      const ariaMatch = ariaLabel.match(/choice\s*([A-D])/i) || ariaLabel.match(/^([A-D])[\.\)]?/i);
+      if (ariaMatch) letter = ariaMatch[1].toUpperCase();
+      if (!letter && text.match(/^([A-D])[\.\)]\s*/)) letter = text.match(/^([A-D])[\.\)]\s*/)[1].toUpperCase();
+      if (!letter && i < 4) letter = String.fromCharCode(65 + i);
+      if (letter && letter >= 'A' && letter <= 'D' && !seenLetters.has(letter)) {
+        seenLetters.add(letter);
+        candidates.push({
+          label: letter,
+          text: extractOptionText(el),
+          element: el,
+          priority: 4.5,
+          source: 'option-candidates'
+        });
+      }
+    }
+  }
+
+  // Priority 정렬 후 y좌표 순으로 정렬 (리딩+그림에서 A~D 순서 안정화)
   candidates.sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
-    return a.label.localeCompare(b.label);
+    try {
+      const ay = (a.element && a.element.getBoundingClientRect) ? a.element.getBoundingClientRect().top : 0;
+      const by = (b.element && b.element.getBoundingClientRect) ? b.element.getBoundingClientRect().top : 0;
+      if (ay !== by) return ay - by;
+    } catch (_) {}
+    return (a.label || '').localeCompare(b.label || '');
   });
   
-  // A-D만 선택하고 중복 제거
+  // A-D만 선택하고 중복 제거 (element 포함해 클릭 가능하게)
   const seenLabels = new Set();
   for (const candidate of candidates) {
     if (candidate.label >= 'A' && candidate.label <= 'D' && !seenLabels.has(candidate.label)) {
       choices.push({
         label: candidate.label,
-        text: candidate.text
+        text: candidate.text,
+        element: candidate.element
       });
       seenLabels.add(candidate.label);
     }
   }
   
-  // 로그 출력: total candidates, first 5 candidate labels
-  console.log(`[SAT-DEBUG] [extractChoices] 총 후보: ${candidates.length}개, 추출된 선택지: ${choices.length}개`);
+  console.log(`[CHOICE-EXTRACT] 총 후보: ${candidates.length}개, 추출된 선택지: ${choices.length}개`);
   if (candidates.length > 0) {
     const first5 = candidates.slice(0, 5).map(c => ({
       label: c.label,
@@ -865,77 +1486,34 @@ export function extractChoices(container) {
     console.log(`[SAT-DEBUG] [extractChoices] 첫 5개 후보:`, first5);
   }
   
-  // Priority 5: 텍스트 기반 폴백 - 클릭 가능한 요소 중 A/B/C/D 텍스트가 있는 것 (Shadow DOM 포함)
+  // Priority 5: 최후 폴백 — 옵션 셀렉터만 사용 (전체 클릭 가능 요소 탐색 금지). 동일 셀렉터에서 텍스트/aria로 letter 추출.
   if (candidates.length < 4) {
-    console.log(`[SAT-DEBUG] [extractChoices] Priority 5 (텍스트 기반 폴백): 클릭 가능한 요소 탐색`);
-    const clickableSelectors = ['button', '[role="button"]', '[tabindex]', '[data-testid]', 'div[onclick]', 'span[onclick]', '[class*="choice"]', '[class*="option"]', '.mat-mdc-radio-button', '.mat-radio-button', '.mat-mdc-list-option'];
-    const allClickableSet = new Set();
-    for (const sel of clickableSelectors) {
-      try {
-        const nodes = deepQuerySelectorAll(sel, container);
-        nodes.forEach(el => allClickableSet.add(el));
-      } catch (e) {
-        // ignore
-      }
-    }
-    const allClickable = Array.from(allClickableSet);
-    console.log(`[SAT-DEBUG] [extractChoices] 전체 클릭 가능 요소: ${allClickable.length}개`);
-    
-    const visibleClickable = allClickable.filter(el => {
-      try {
-        const r = el.getBoundingClientRect();
-        if (r.width < 20 || r.height < 20) return false;
-        if (r.bottom < 0 || r.top > window.innerHeight) return false;
-        const style = window.getComputedStyle(el);
-        if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') return false;
-        return true;
-      } catch (e) {
-        return false;
-      }
+    console.log(`[SAT-DEBUG] [extractChoices] Priority 5 (옵션 셀렉터 텍스트 폴백): 정답 옵션 셀렉터만`);
+    const p5Els = getChoiceCandidates(container);
+    p5Els.sort((a, b) => {
+      try { return (a.getBoundingClientRect?.()?.top ?? 0) - (b.getBoundingClientRect?.()?.top ?? 0); } catch (_) { return 0; }
     });
-    
-    console.log(`[SAT-DEBUG] [extractChoices] 화면에 보이는 클릭 가능 요소: ${visibleClickable.length}개`);
-    
-    for (const el of visibleClickable) {
-      if (el.disabled) continue;
+    const existingLetters = new Set(candidates.map(c => c.label).filter(l => l >= 'A' && l <= 'D'));
+    for (let i = 0; i < p5Els.length; i++) {
+      const el = p5Els[i];
       if (candidates.find(c => c.element === el)) continue;
-      
       const text = (el.innerText || el.textContent || '').trim();
       const ariaLabel = (el.getAttribute('aria-label') || '').trim();
-      const combinedText = (text + ' ' + ariaLabel).trim();
-      
-      // A/B/C/D 패턴 매칭 (더 유연하게)
+      const combined = (text + ' ' + ariaLabel).trim();
       let choiceLetter = null;
-      const patterns = [
-        /^(A|B|C|D)\b/i,
-        /\b(A|B|C|D)\b/i,
-        /^(A|B|C|D)[\.\)]\s*/i,
-        /choice\s*(A|B|C|D)/i,
-        /option\s*(A|B|C|D)/i,
-        /선택지\s*(A|B|C|D)/i
-      ];
-      
-      for (const pattern of patterns) {
-        const match = combinedText.match(pattern);
-        if (match) {
-          choiceLetter = match[1].toUpperCase();
-          break;
-        }
-      }
-      
-      if (choiceLetter && choiceLetter >= 'A' && choiceLetter <= 'D') {
-        const existingLetters = candidates.map(c => c.label).filter(l => l >= 'A' && l <= 'D');
-        if (!existingLetters.includes(choiceLetter)) {
-          const choiceText = text.replace(/^(A|B|C|D)[\.\)]\s*/i, '').trim() || ariaLabel || '선택지';
-          candidates.push({
-            label: choiceLetter,
-            text: choiceText,
-            element: el,
-            priority: 5,
-            source: '텍스트 기반 폴백'
-          });
-          console.log(`[SAT-DEBUG] [extractChoices] 텍스트 기반 후보 발견: ${choiceLetter} - ${choiceText.substring(0, 30)}`);
-        }
+      const m1 = combined.match(/choice\s*(A|B|C|D)/i) || combined.match(/^([A-D])[\.\)]\s*/i);
+      if (m1) choiceLetter = m1[1].toUpperCase();
+      if (!choiceLetter && i < 4) choiceLetter = String.fromCharCode(65 + i);
+      if (choiceLetter && choiceLetter >= 'A' && choiceLetter <= 'D' && !existingLetters.has(choiceLetter)) {
+        existingLetters.add(choiceLetter);
+        candidates.push({
+          label: choiceLetter,
+          text: text.replace(/^[A-D][\.\)]\s*/i, '').trim() || ariaLabel || '선택지',
+          element: el,
+          priority: 5,
+          source: '옵션 셀렉터 텍스트 폴백'
+        });
+        console.log(`[SAT-DEBUG] [extractChoices] P5 후보: ${choiceLetter} (옵션 셀렉터)`);
       }
     }
     
@@ -962,7 +1540,49 @@ export function extractChoices(container) {
     }
   }
   
-  // 최종 폴백: 순수 텍스트 기반 추출 (Shadow DOM 포함, 패턴 완화)
+  // 최종 폴백 1: radio/radio-button DOM 순서 (텍스트 불필요 - Math SVG 등)
+  if (choices.length === 0) {
+    const radioFallbackSelectors = ['.mat-mdc-radio-button', '.mat-radio-button', '[role="radio"]', 'mat-list-option'];
+    const radioFallbackEls = [];
+    try {
+      const inputs = deepQuerySelectorAll('input[type="radio"]', container);
+      for (const inp of inputs) {
+        if (inp.disabled) continue;
+        const wrapper = inp.closest('.mat-mdc-radio-button, .mat-radio-button, label') || inp.parentElement;
+        if (wrapper) radioFallbackEls.push(wrapper);
+      }
+    } catch (_) {}
+    for (const sel of radioFallbackSelectors) {
+      try {
+        const nodes = deepQuerySelectorAll(sel, container);
+        for (const el of nodes) {
+          if (el.disabled) continue;
+          try {
+            const r = el.getBoundingClientRect();
+            if (r.width >= 20 && r.height >= 20 && r.bottom >= 0 && r.top <= window.innerHeight) {
+              radioFallbackEls.push(el);
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    let uniqueRadio = [...new Map(radioFallbackEls.map(e => [e, e])).values()];
+    uniqueRadio = uniqueRadio.filter(el => !uniqueRadio.some(other => other !== el && other.contains(el)));
+    uniqueRadio.sort((a, b) => (a.getBoundingClientRect?.()?.top ?? 0) - (b.getBoundingClientRect?.()?.top ?? 0));
+    if (uniqueRadio.length >= 2) {
+      uniqueRadio.slice(0, 4).forEach((el, i) => {
+        choices.push({
+          label: ['A', 'B', 'C', 'D'][i],
+          text: extractOptionText(el),
+          element: el,
+          source: 'radio-dom-order',
+          priority: 6
+        });
+      });
+      console.log(`[SAT-DEBUG] [extractChoices] radio DOM 순서 폴백: ${choices.length}개`);
+    }
+  }
+  // 최종 폴백 2: 순수 텍스트 기반 추출 (Shadow DOM 포함, 패턴 완화)
   if (choices.length === 0) {
     console.warn('[SAT PDF Exporter] 모든 방법으로 선택지를 찾지 못함 - 순수 텍스트 기반 폴백 시도');
     const tagSelectors = ['div', 'span', 'p', 'li', 'button', 'label', 'td', '[role="button"]'];
@@ -1182,8 +1802,9 @@ export async function extractCurrentProblem(sectionType) {
   }
   // ============================================================================
   
-  // 선택지 추출 (A-D만)
-  const choicesArray = extractChoices(document.body);
+  // 선택지 추출 (A-D만). root 기준만 사용.
+  const rootForExtract = await getRootForExtract();
+  const choicesArray = rootForExtract ? extractChoicesSafe(rootForExtract) : [];
   
   // choices를 {A: \"...\", B: \"...\", C: \"...\", D: \"...\"} 형태로 변환
   const choices = {};
@@ -1271,152 +1892,53 @@ export async function extractCurrentProblem(sectionType) {
 }
 
 /**
- * Progress 상태 가져오기 (대폭 강화 - 화면 전체에서 정규식으로 찾기)
- * @returns {string|null} Progress 상태 (예: "1/27", "5/27")
+ * Progress 상태 — progress 전용 엘리먼트 textContent만 사용 (satRoot innerText regex 제거, 16→9 점프 방지).
+ * @returns {string|null} Progress 상태 (예: "1 / 27", "5 / 27")
  */
 export function getProgressState() {
-  // FRAME GUARD: DOM 작업은 worker frame에서만 실행 (단, 읽기 전용이므로 완화)
-  // 읽기 전용 함수이므로 guard는 경고만 출력
   if (window !== window.top && !window.__SAT_IS_WORKER) {
     console.warn('[SAT-DEBUG] [getProgressState] Worker frame이 아닌 iframe에서 실행 - 경고만 출력');
   }
-  
-  // SAT root container 찾기 (매번 재탐색 - 리렌더로 바뀔 수 있음)
   const satRoot = findSatRoot();
-  if (!satRoot) {
-    console.warn('[DIAG] satRoot not found, progress 판독 실패');
-    return null;
+  const prog = (satRoot ? readProgressNumber(satRoot) : null) || readProgressNumber(document);
+  if (prog) {
+    console.log(`[SAT PDF Exporter] Progress 발견 (progress element): ${prog.raw}`);
+    return prog.raw;
   }
-  
-  // 방법 1: satRoot 내부 텍스트에서만 정규식으로 찾기 (전역 텍스트 금지)
-  const satRootText = satRoot.innerText || satRoot.textContent || '';
-  const progressRegex = /(\d+)\s*\/\s*(\d+)/g;
-  const matches = satRootText.match(progressRegex);
-  
-  if (matches && matches.length > 0) {
-    // 가장 많이 나타나는 패턴 선택 (보통 정확한 progress)
-    const matchCounts = {};
-    matches.forEach(match => {
-      matchCounts[match] = (matchCounts[match] || 0) + 1;
-    });
-    
-    const mostCommon = Object.keys(matchCounts).reduce((a, b) => 
-      matchCounts[a] > matchCounts[b] ? a : b
-    );
-    
-    const parts = mostCommon.split('/').map(s => s.trim());
-    const current = parseInt(parts[0]);
-    const total = parseInt(parts[1]);
-    
-    if (current > 0 && current <= total && (total === 27 || total === 22)) {
-      console.log(`[SAT PDF Exporter] Progress 발견 (satRoot text regex): ${mostCommon}`);
-      console.log(`[DIAG] progress text raw: "${satRootText.slice(0, 200)}"`);
-      return mostCommon;
-    }
-  }
-  
-  // 방법 1-2: satRoot 내부에서 특정 셀렉터로 찾기
-  const satRootProgressElements = satRoot.querySelectorAll('[class*="progress"], [aria-label*="progress"], [class*="indicator"]');
-  for (const el of satRootProgressElements) {
-    if (!isElementVisible(el)) continue;
-    const text = (el.innerText || el.textContent || '').trim();
-    const match = text.match(/(\d+)\s*\/\s*(\d+)/);
-    if (match) {
-      const current = parseInt(match[1]);
-      const total = parseInt(match[2]);
-      if (current > 0 && current <= total && (total === 27 || total === 22)) {
-        console.log(`[SAT PDF Exporter] Progress 발견 (satRoot selector): ${match[0]}`);
-        return match[0];
-      }
-    }
-  }
-  
-  // Progress를 찾을 수 없으면 hard fail (기본값 사용 금지)
-  console.error('[DIAG] Progress를 찾을 수 없습니다. satRoot snippet:', satRoot?.innerText?.slice(0, 500));
+  console.warn('[DIAG] Progress를 찾을 수 없습니다 (progress element만 사용, satRoot text 미사용).');
   return null;
 }
 
-// 현재 문제 번호 가져오기 (100% 신뢰 가능 + 폴백) - 수정: satRoot 내부로 제한
+// 현재 문제 번호 — progress 전용 엘리먼트 우선 (satRoot innerText regex 제거)
 export function getCurrentProblemNumber() {
-  // SAT root container 찾기
   const satRoot = findSatRoot();
-  if (!satRoot) {
-    console.warn('[DIAG] satRoot not found, problem number 판독 실패');
-    return 0;
+  const prog = (satRoot ? readProgressNumber(satRoot) : null) || readProgressNumber(document);
+  if (prog && prog.cur >= 1) {
+    return prog.cur;
   }
-  
-  // 방법 1: satRoot 내부에서 UI 상단 progress 표시 요소를 정확히 찾기
-  const progressSelectors = [
-    '[class*="progress"]',
-    '[class*="indicator"]',
-    '[aria-label*="progress"]',
-    '[class*="slider"]',
-    '[class*="step"]'
-  ];
-  
+  if (!satRoot) return 1;
+  // 폴백: progress UI 셀렉터 (textContent만, innerText 아님)
+  const progressSelectors = ['[class*="progress"]', '[class*="indicator"]', '[aria-label*="progress"]'];
   for (const selector of progressSelectors) {
-    const elements = satRoot.querySelectorAll(selector);
-    for (const el of elements) {
-      if (!isElementVisible(el)) continue; // 보이지 않는 요소 제외
-      
-      const text = (el.innerText || el.textContent || '').trim();
-      // Reading 27문제, Math 22문제 지원
+    for (const el of satRoot.querySelectorAll(selector)) {
+      const text = (el.textContent || '').trim();
       const match = text.match(/\b(\d+)\s*\/\s*(27|22)\b/);
       if (match) {
         const num = parseInt(match[1]);
-        const total = parseInt(match[2]);
-        if (num > 0 && num <= total) {
-          console.log(`[SAT PDF Exporter] 문제 번호 발견 (satRoot progress UI): ${num}/27 (raw: "${text}")`);
-          // #region agent log
-          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:found1',message:'getCurrentProblemNumber found via progress UI',data:{num,text,method:'progressUI'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-          // #endregion
-          return num;
-        }
+        if (num > 0 && num <= parseInt(match[2])) return num;
       }
     }
   }
-  
-  // 방법 2: satRoot 내부 텍스트에서 progress 패턴 찾기
-  const satRootText = satRoot.innerText || satRoot.textContent || '';
-  const match = satRootText.match(/\b(\d+)\s*\/\s*(27|22)\b/);
-  if (match) {
-    const num = parseInt(match[1]);
-    const total = parseInt(match[2]);
-    if (num > 0 && num <= total) {
-      console.log(`[SAT PDF Exporter] 문제 번호 발견 (satRoot text): ${num}/27`);
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:found2',message:'getCurrentProblemNumber found via satRoot text',data:{num,method:'satRootText'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
-      return num;
+  // 폴백: 문제 번호로 시작하는 텍스트 (요소 textContent만)
+  for (const el of satRoot.querySelectorAll('[class*="question"], [class*="problem"], [class*="number"]')) {
+    const text = (el.textContent || '').trim();
+    const m = text.match(/^(\d+)\./);
+    if (m) {
+      const num = parseInt(m[1]);
+      if (num > 0 && num <= 27) return num;
     }
   }
-  
-  // 방법 3: satRoot 내부의 문제 번호로 시작하는 텍스트 찾기
-  const problemNumberElements = satRoot.querySelectorAll('[class*="question"], [class*="problem"], [class*="number"]');
-  for (const el of problemNumberElements) {
-    if (!isElementVisible(el)) continue;
-    const text = (el.innerText || el.textContent || '').trim();
-    const numMatch = text.match(/^(\d+)\./);
-    if (numMatch) {
-      const num = parseInt(numMatch[1]);
-      if (num > 0 && num <= 27) {
-        console.log(`[SAT PDF Exporter] 문제 번호 발견 (satRoot 텍스트 패턴): ${num}`);
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:found3',message:'getCurrentProblemNumber found via text pattern',data:{num,text,method:'textPattern'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
-        return num;
-      }
-    }
-  }
-  
-  console.warn('[SAT PDF Exporter] 문제 번호를 찾을 수 없습니다. 기본값 1 사용');
-  
-  // #region agent log
-  const defaultReturn = 1;
-  fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:getCurrentProblemNumber:default',message:'getCurrentProblemNumber returning default 1',data:{satRootFound:!!satRoot,defaultReturn},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-  // #endregion
-  
-  return defaultReturn; // 기본값
+  return 1;
 }
 
 /**
@@ -2585,7 +3107,7 @@ export function extractByTextPattern(sectionType) {
 }
 
 // Reading 섹션 데이터 추출 (실제 화면에서 보이는 텍스트 직접 추출)
-export function extractReadingSection() {
+export async function extractReadingSection() {
   const problems = [];
   
   console.log('[SAT PDF Exporter] Reading 섹션 추출 시작');
@@ -2637,8 +3159,9 @@ export function extractReadingSection() {
     }
   }
   
-  // 선택지 추출
-  const choices = extractChoices(document.body);
+  // 선택지 추출 (root 기준)
+  const rootForPdf = await getRootForExtract();
+  const choices = rootForPdf ? extractChoicesSafe(rootForPdf) : [];
   
   // 정답 및 해설 추출
   const answer = extractAnswer(document.body);
@@ -2668,7 +3191,7 @@ export function extractReadingSection() {
 }
 
 // Math 섹션 데이터 추출 (실제 화면에서 보이는 텍스트 직접 추출)
-export function extractMathSection() {
+export async function extractMathSection() {
   const problems = [];
   
   console.log('[SAT PDF Exporter] Math 섹션 추출 시작');
@@ -2709,8 +3232,9 @@ export function extractMathSection() {
     }
   }
   
-  // 선택지 추출
-  const choices = extractChoices(document.body);
+  // 선택지 추출 (root 기준)
+  const rootForMath = await getRootForExtract();
+  const choices = rootForMath ? extractChoicesSafe(rootForMath) : [];
   
   // Grid-in 문제 확인
   const isGridIn = choices.length === 0;
@@ -2752,7 +3276,7 @@ export function extractMathSection() {
 }
 
 // SAT 문제 데이터 추출 함수 (현재 화면만) - 수정: 섹션 감지 후 분기
-export function extractSATData() {
+export async function extractSATData() {
   const data = {
     reading: [],
     math: [],
@@ -2766,25 +3290,25 @@ export function extractSATData() {
     if (currentSection === 'reading') {
       // Reading 섹션만 추출
       console.log('[SAT PDF Exporter] Reading 섹션으로 감지됨 - Reading만 추출');
-      const readingSection = extractReadingSection();
+      const readingSection = await extractReadingSection();
       if (readingSection.length > 0) {
         data.reading = readingSection;
       }
     } else if (currentSection === 'math') {
       // Math 섹션만 추출
       console.log('[SAT PDF Exporter] Math 섹션으로 감지됨 - Math만 추출');
-      const mathSection = extractMathSection();
+      const mathSection = await extractMathSection();
       if (mathSection.length > 0) {
         data.math = mathSection;
       }
     } else {
       // 섹션 감지 실패 시 양쪽 모두 시도 (하지만 경고 로그)
       console.warn('[SAT PDF Exporter] 섹션 감지 실패 - Reading과 Math 모두 시도 (비권장)');
-      const readingSection = extractReadingSection();
+      const readingSection = await extractReadingSection();
       if (readingSection.length > 0) {
         data.reading = readingSection;
       }
-      const mathSection = extractMathSection();
+      const mathSection = await extractMathSection();
       if (mathSection.length > 0) {
         data.math = mathSection;
       }

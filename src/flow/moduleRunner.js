@@ -4,8 +4,10 @@
 import { CONFIG, TEMP_MODE, TEMP_TARGET_NUMBERS } from '../config/constants.js';
 import { isElementVisible } from '../dom/deepQuery.js';
 import { waitForCondition, waitForContentLoad } from '../dom/wait.js';
-import { isQuestionScreen, getCurrentProblemNumber, getProgressState, extractCurrentProblem, getQuestionSignature, isGraded, waitForGrading, detectCorrectAnswer, extractExplanationAfterGrading, findSatRoot, isModuleStartScreen } from '../dom/extract.js';
+import { isQuestionScreen, getCurrentProblemNumber, getProgressState, extractCurrentProblem, getQuestionSignature, isGraded, waitForGrading, detectCorrectAnswer, extractExplanationAfterGrading, findSatRoot, getSatRootForChoices, describeDoc, isModuleStartScreen, ensureChoicesVisible, extractChoices } from '../dom/extract.js';
 import { clickNextButtonWithFallback, clickFirstChoice, clickSubmitWithConfirmation, findNavigationButton } from '../dom/buttons.js';
+import { deepQuerySelectorAll } from '../dom/deepQuery.js';
+import { safeClick, forceClick } from '../dom/wait.js';
 
 /** 현재 문제 영역에 이미지/사진이 있는지 여부 (선지 구간 대기 시간 조절용) */
 function currentProblemHasImage() {
@@ -20,9 +22,26 @@ function currentProblemHasImage() {
  * @param {string} sectionType - 'reading' | 'math'
  * @param {string} moduleName - 'Module 1' | 'Module 2'
  */
+/** 실행 프레임 가드: SAT DOM이 있는 frame에서만 진행. */
+function assertFrameAndSAT() {
+  const hasSAT = !!document.querySelector('activity-set') &&
+    !!document.querySelector('[data-test-id="next-button"]');
+  if (!hasSAT) {
+    console.warn('[FRAME-GUARD] no SAT dom in this frame, abort', describeDoc(document));
+    const err = new Error('FRAME_GUARD: no SAT DOM in this frame');
+    err.code = 'FRAME_GUARD';
+    throw err;
+  }
+}
+
 export async function collectModuleProblems(allData, sectionType, moduleName) {
+  if (typeof window !== 'undefined' && window.top !== window) {
+    console.warn('[FRAME-GUARD] iframe abort', typeof location !== 'undefined' ? location.href : '');
+    return 0;
+  }
+  assertFrameAndSAT();
   console.log(`[FLOW] collectModuleProblems start: ${sectionType} ${moduleName}`);
-  
+
   const moduleNumber = moduleName === 'Module 1' ? 1 : 2;
   const targetArray = sectionType === 'reading' ? allData.reading : allData.math;
 
@@ -66,12 +85,14 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
   const maxConsecutiveDuplicates = 3;
   let consecutiveExtractFailures = 0;
   const maxExtractRetries = 5;
+  let consecutiveChoiceFailures = 0;
+  const maxConsecutiveChoiceFailures = 5;
 
-  // 루프 조건: TEMP 모드가 아니면 현재 모듈에서 정확히 27개까지 수집 (27번 문제 포함)
-  // BUG FIX: targetArray.length가 아닌 현재 모듈의 문제 수를 기준으로 루프 조건 설정
-  // BUG FIX: Module 2에서는 progress 증가 확인 시 consecutiveDuplicates 체크 완화
+  // 루프 조건: TEMP 모드가 아니면 현재 모듈에서 maxProblems(Reading 27, Math 22)까지 수집
+  // BUG FIX: Module 2 또는 Math 섹션은 consecutiveDuplicates로 조기 종료하지 않음 (Math Module 1이 22개 채우기 전에 PDF 생성되는 문제 방지)
   let lastProgressState = null;
-  while ((TEMP_MODE ? collectedNumbers.size < targetNumbers.size : targetArray.filter(p => p.module === moduleNumber).length < maxProblems) && (moduleNumber === 2 ? true : consecutiveDuplicates < maxConsecutiveDuplicates)) {
+  const allowDuplicateExit = (moduleNumber === 2 || sectionType === 'math') ? false : true; // Reading Module 1만 중복 3회 시 종료
+  while ((TEMP_MODE ? collectedNumbers.size < targetNumbers.size : targetArray.filter(p => p.module === moduleNumber).length < maxProblems) && (allowDuplicateExit ? consecutiveDuplicates < maxConsecutiveDuplicates : true)) {
     // STEP 3: TEMP 모드 체크는 문제 push 후에 수행 (아래로 이동)
     // 현재 문제 화면 확인
     const isQuestion = isQuestionScreen();
@@ -123,7 +144,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     }
     
     // 문제 번호를 다시 한 번 확인 (DOM이 업데이트되었을 수 있음)
-    await new Promise(resolve => setTimeout(resolve, 120));
+    await new Promise(resolve => setTimeout(resolve, 25));
     const retryProblemNum = getCurrentProblemNumber();
     if (retryProblemNum > 0 && retryProblemNum !== currentProblemNum) {
       console.log(`[FLOW] 문제 번호 재확인: ${currentProblemNum} → ${retryProblemNum}`);
@@ -186,7 +207,9 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     if (seenSignatures.has(signature)) {
       console.warn(`[FLOW] 중복 문제 감지: ${signature} (모듈: ${moduleNumber}, 문제: ${currentProblemNum})`);
       consecutiveDuplicates++;
-      
+      // #region agent log
+      fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:duplicateContinue',message:'duplicate detected, continue (no choice click)',data:{signature,moduleNumber,currentProblemNum},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:duplicateDetected',message:'duplicate problem detected, incrementing consecutiveDuplicates',data:{signature,moduleNumber,currentProblemNum,consecutiveDuplicates,maxConsecutiveDuplicates,reason:'signature already seen',beforeProgressState,lastProgressState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
       // #endregion
@@ -210,11 +233,15 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       }
       
       if (consecutiveDuplicates >= maxConsecutiveDuplicates) {
-        console.warn(`[FLOW] 연속 중복 ${maxConsecutiveDuplicates}회. 수집 종료.`);
+        if (allowDuplicateExit) {
+          console.warn(`[FLOW] 연속 중복 ${maxConsecutiveDuplicates}회. 수집 종료.`);
         // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:breakConsecutiveDuplicates',message:'BREAK: consecutive duplicates exceeded',data:{reason:'consecutiveDuplicatesExceeded',currentProblemNum,moduleProblemsCount:targetArray.filter(p => p.module === moduleNumber).length,consecutiveDuplicates,maxConsecutiveDuplicates,progressState:getProgressState(),isQuestion:isQuestionScreen(),signature,moduleNumber,lastProgressState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
-        // #endregion
-        break;
+          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:breakConsecutiveDuplicates',message:'BREAK: consecutive duplicates exceeded',data:{reason:'consecutiveDuplicatesExceeded',currentProblemNum,moduleProblemsCount:targetArray.filter(p => p.module === moduleNumber).length,consecutiveDuplicates,maxConsecutiveDuplicates,progressState:getProgressState(),isQuestion:isQuestionScreen(),signature,moduleNumber,lastProgressState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
+          // #endregion
+          break;
+        } else {
+          console.log(`[FLOW] Math/Module2: 연속 중복 ${consecutiveDuplicates}회이지만 maxProblems(${maxProblems})까지 수집 계속.`);
+        }
       }
     } else {
       consecutiveDuplicates = 0;
@@ -240,15 +267,15 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       continue;
     }
     
-    // 이미 채점된 상태인지 확인
-    const alreadyGraded = isGraded();
-    
+    // 선지를 반드시 선택한 뒤에만 다음 문제로 넘어가도록, "이미 채점" 건너뛰기 비활성화 (항상 선지 클릭 → 제출 → 채점 경로 수행)
+    const skipChoiceBecauseGraded = false;
+
     // BUG FIX: 27번 문제는 제출 전에 문제 추출 (화면 전환 전에)
     const isLastProblem = currentProblemNum === maxProblems;
     
     // BUG FIX: 27번 문제는 제출 전에 문제 추출 (화면 전환 전에)
     let problem = null;
-    if (isLastProblem && !alreadyGraded) {
+    if (isLastProblem) {
       console.log(`[FLOW] 27번 문제 감지: 제출 전에 문제 추출 중...`);
       // #region agent log
       const beforeExtractProblemNum = getCurrentProblemNumber();
@@ -269,84 +296,173 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     // 정답과 해설 변수 선언 (블록 밖에서 선언하여 스코프 문제 해결)
     let correctAnswer = null;
     let explanation = '';
-    
+    /** 이번 문제에서 선지 클릭이 성공했을 때만 true. 선지 미클릭 시 다음 문제로 넘어가지 않도록 강제 */
+    let choiceClickedThisProblem = false;
+
     // 선택지 클릭 및 채점 (정답 추출을 위해 필수)
     // TEMP_MODE에서도 정답 추출을 위해 선택지 클릭 → submit → grading 필요
     // BUG FIX: 27번 문제는 제출 전에 문제 추출 + 정답 추출 (선택지 클릭 직후, 제출 전)
     // 이유: 제출 시 화면 전환이 즉시 발생하여 제출 후에는 정답 DOM이 사라짐
-    if (!alreadyGraded) {
-      // 선지 선택 구간이 너무 빨리 지나가지 않도록 대기 (특히 사진 있는 문제)
+    // BUG FIX: 해설 DOM이 없으면 "이미 채점"으로 건너뛰지 않음 (이전 문제 잔상 오판 방지)
+    if (!skipChoiceBecauseGraded) {
+      console.log('[CTX]', {
+        isTop: window.top === window,
+        href: location.href,
+        hasActivitySet: !!document.querySelector('activity-set'),
+        choices: document.querySelectorAll('mat-action-list.choices-container button').length
+      });
       const hasImage = currentProblemHasImage();
       const beforeMs = hasImage ? CONFIG.timeouts.beforeChoiceClickWithImage : CONFIG.timeouts.beforeChoiceClick;
-      console.log(`[FLOW] 선지 클릭 전 대기 ${beforeMs}ms${hasImage ? ' (이미지 있음)' : ''}...`);
       await new Promise(resolve => setTimeout(resolve, beforeMs));
 
-      // 선택지 클릭 (A) - 실패 시 재시도 후에도 실패하면 제출하지 않고 같은 문제 재시도
-      const maxChoiceClickRetries = 3;
-      const choiceRetryDelayMs = 400;
-      let clicked = await clickFirstChoice(sectionType);
-      if (!clicked) {
-        for (let retry = 1; retry <= maxChoiceClickRetries; retry++) {
-          console.log(`[FLOW] 선택지 클릭 실패. 재시도 ${retry}/${maxChoiceClickRetries} (${choiceRetryDelayMs}ms 후)...`);
-          await new Promise(resolve => setTimeout(resolve, choiceRetryDelayMs));
-          clicked = await clickFirstChoice(sectionType);
-          if (clicked) break;
+      let rootRef = getSatRootForChoices();
+
+      // Math 단답식(short-answer): textarea 입력 + 정답확인 클릭
+      const shortAnswerInput = rootRef?.querySelector('textarea[data-test-id="short-answer-text"], textarea[placeholder*="여기에 입력"], textarea[placeholder*="Enter here"]') || document.querySelector('textarea[data-test-id="short-answer-text"], textarea[placeholder*="여기에 입력"], textarea[placeholder*="Enter here"]');
+      if (sectionType === 'math' && shortAnswerInput && !shortAnswerInput.disabled) {
+        console.log(`[FLOW] Math 단답식 감지 - textarea 입력 + 정답확인 클릭`);
+        shortAnswerInput.focus();
+        await new Promise(r => setTimeout(r, 30));
+        shortAnswerInput.value = '1';
+        shortAnswerInput.dispatchEvent(new Event('input', { bubbles: true }));
+        shortAnswerInput.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 30));
+        const checkAnswerBtns = deepQuerySelectorAll('span.mat-mdc-button-touch-target');
+        for (const span of checkAnswerBtns) {
+          const btn = span.closest('button');
+          if (!btn || btn.disabled) continue;
+          const labelEl = btn.querySelector('.mdc-button__label');
+          const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || '').trim();
+          if (/정답\s*확인|check\s*answer/i.test(btnText)) {
+            let clicked = await safeClick(btn);
+            if (!clicked) clicked = await forceClick(btn);
+            if (clicked) {
+              choiceClickedThisProblem = true;
+              console.log('[FLOW] ✓ Math 단답식 정답확인 클릭 성공');
+              await new Promise(r => setTimeout(r, 120)); // 채점 UI 표시 대기
+            }
+            break;
+          }
+        }
+      }
+
+      if (!choiceClickedThisProblem) {
+      console.log(`[FLOW-CHOICE] 문제 ${currentProblemNum} 선지 클릭 시도 시작`);
+      await ensureChoicesVisible({ root: rootRef, maxScrollAttempts: 16, problemNumber: currentProblemNum });
+      await new Promise(r => setTimeout(r, 25));
+      let choices = extractChoices(rootRef);
+
+      const maxBlockRetries = 2;
+      let blockAttempt = 0;
+      let clicked = false;
+      while (blockAttempt <= maxBlockRetries) {
+        try {
+          const firstEl = choices[0] && choices[0].element;
+          const beforeClass = firstEl ? firstEl.className : '';
+          clicked = await clickFirstChoice(sectionType, rootRef);
+          await new Promise(r => setTimeout(r, 25));
+          const afterClass = firstEl ? firstEl.className : '';
+          const verified = (afterClass !== beforeClass) || /answered|selected|revealed/.test(afterClass || '');
+          if (!verified && firstEl) {
+            const failErr = new Error('CHOICE_CLICK_FAILED');
+            failErr.code = 'CHOICE_CLICK_FAILED';
+            throw failErr;
+          }
+          consecutiveChoiceFailures = 0;
+          choiceClickedThisProblem = true;
+          console.log('[FLOW] ✓ 선택지 클릭 성공');
+          break;
+        } catch (err) {
+          if (err?.code === 'CHOICE_CLICK_FAILED' || err?.code === 'CHOICE_VERIFY_FAILED' || err?.code === 'NO_CHOICES_EXTRACTED' || err?.code === 'CHOICES_NOT_FOUND') {
+            blockAttempt++;
+            if (blockAttempt > maxBlockRetries) throw err;
+            await new Promise(r => setTimeout(r, 40));
+            rootRef = getSatRootForChoices();
+            await ensureChoicesVisible({ root: rootRef, maxScrollAttempts: 16, problemNumber: currentProblemNum });
+            await new Promise(r => setTimeout(r, 25));
+            choices = extractChoices(rootRef);
+            continue;
+          }
+          throw err;
         }
       }
       if (!clicked) {
-        console.warn(`[FLOW] 선택지 클릭 최종 실패. 제출하지 않고 같은 문제 다시 시도합니다.`);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        continue;
+        consecutiveChoiceFailures++;
+        const choiceFailErr = new Error(`[CHOICE] 문제 ${currentProblemNum} 선지 선택 실패 (연속 ${consecutiveChoiceFailures}/${maxConsecutiveChoiceFailures})`);
+        choiceFailErr.code = 'CHOICE_VERIFY_FAILED';
+        choiceFailErr.problemNumber = currentProblemNum;
+        throw choiceFailErr;
       }
-      console.log(`[FLOW] ✓ 선택지 클릭 성공`);
+      }
+
       // 선지 클릭 후 제출 전 대기 (다음 선지 구간이 너무 빨리 지나가지 않도록)
       const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
       console.log(`[FLOW] 선지 클릭 후 제출 전 대기 ${afterMs}ms${hasImage ? ' (이미지 있음)' : ''}...`);
       await new Promise(resolve => setTimeout(resolve, afterMs));
 
-      // BUG FIX: 27번 문제는 제출 전에 정답 추출 (선택지 클릭 시 즉시 채점됨)
-      if (isLastProblem && clicked) {
-        console.log(`[FLOW] 27번: 제출 전에 정답 추출 (화면 전환 전)...`);
-        await new Promise(resolve => setTimeout(resolve, 120));
-        correctAnswer = detectCorrectAnswer();
-        explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
-        if (correctAnswer) {
-          console.log(`[FLOW] ✓ 27번 문제 정답 추출 성공 (제출 전): ${correctAnswer}`);
-        }
-      }
-      
-      // 제출 (선택지 클릭이 성공한 경우에만)
-      console.log(`[FLOW] 제출 버튼 클릭 중...`);
-      // BUG FIX: 27번은 확인 버튼 클릭 직후(화면 전환 전)에 정답을 캡처하도록 콜백 전달
-      const onAfterConfirm = isLastProblem ? async () => {
-        console.log('[FLOW] 27번: 확인 클릭 직후 정답 폴링 시작...');
-        const deadline = Date.now() + 3000;
-        while (Date.now() < deadline && !correctAnswer) {
-          const polled = detectCorrectAnswer();
-          if (polled) {
-            correctAnswer = polled;
-            explanation = extractExplanationAfterGrading(polled, currentProblemNum) || '';
-            console.log(`[FLOW] 27번: 확인 직후 정답 확보 → ${polled}`);
-            fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:lastProblemOnConfirm',message:'27 answer captured in onAfterConfirm',data:{currentProblemNum,polled},timestamp:Date.now(),runId:'run1',hypothesisId:'K'})}).catch(()=>{});
-            break;
-          }
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-      } : undefined;
-      const submitted = await clickSubmitWithConfirmation(onAfterConfirm);
-      if (!submitted) {
-        console.warn(`[FLOW] 제출 실패. 다음 문제로 이동 시도.`);
+      // 자동 채점 UI 여부 확인: 2.5초 안에 graded 상태면 제출 스킵
+      const autoGraded = await new Promise(resolve => {
+        const deadline = Date.now() + 600;
+        const check = () => {
+          if (Date.now() >= deadline) { resolve(false); return; }
+          const root = findSatRoot();
+          if (!root) { setTimeout(check, 25); return; }
+          const has = root.querySelector('[class*="answered-correct"], [class*="answered-incorrect"], [aria-label*="Correct" i], [aria-label*="Incorrect" i], [class*="explanation"], [class*="해설"], [class*="solution"]');
+          if (has) { resolve(true); return; }
+          setTimeout(check, 25);
+        };
+        check();
+      });
+      if (autoGraded) {
+        console.log(`[FLOW] 자동 채점 감지 → 제출 단계 스킵`);
       } else {
-        console.log(`[FLOW] ✓ 제출 성공`);
+        // BUG FIX: 27번 문제는 제출 전에 정답 추출 (선택지 클릭 시 즉시 채점됨)
+        if (isLastProblem && clicked) {
+          console.log(`[FLOW] 27번: 제출 전에 정답 추출 (화면 전환 전)...`);
+          await new Promise(resolve => setTimeout(resolve, 25));
+          correctAnswer = detectCorrectAnswer();
+          explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
+          if (correctAnswer) {
+            console.log(`[FLOW] ✓ 27번 문제 정답 추출 성공 (제출 전): ${correctAnswer}`);
+          }
+        }
+        console.log(`[FLOW] 제출 버튼 클릭 시도...`);
+        const onAfterConfirm = isLastProblem ? async () => {
+          console.log('[FLOW] 27번: 확인 클릭 직후 정답 폴링 시작...');
+          const deadline = Date.now() + 700;
+          while (Date.now() < deadline && !correctAnswer) {
+            const polled = detectCorrectAnswer();
+            if (polled) {
+              correctAnswer = polled;
+              explanation = extractExplanationAfterGrading(polled, currentProblemNum) || '';
+              console.log(`[FLOW] 27번: 확인 직후 정답 확보 → ${polled}`);
+              break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+        } : undefined;
+        const submitted = await clickSubmitWithConfirmation(onAfterConfirm);
+        if (!submitted) {
+          console.warn(`[FLOW] 제출 버튼 없음(자동 채점 가능). 채점 대기로 진행.`);
+        } else {
+          console.log(`[FLOW] ✓ 제출 성공`);
+        }
       }
       
-      // 채점 대기 (27번은 onAfterConfirm에서 이미 정답 확보했으면 스킵)
+      // 채점 대기 (제출 유무와 관계없이 항상 진행)
       console.log(`[FLOW] 채점 대기 중...`);
       let gradingResult = !!correctAnswer;
       if (!gradingResult) {
         gradingResult = await waitForGrading(1500);
       }
-      
+      // #region agent log
+      (function () {
+        const satRoot = findSatRoot();
+        const hasExplanationDom = satRoot ? !!satRoot.querySelector('[class*="explanation"], [class*="해설"], [class*="solution"]') : false;
+        fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:afterGradingCheck',message:'after waitForGrading',data:{gradingResult,currentProblemNum,hasExplanationDom},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+      })();
+      // #endregion
+
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:afterGrading',message:'after grading wait',data:{gradingResult,isLastProblem,currentProblemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
       // #endregion
@@ -356,7 +472,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         // BUG FIX: 27번 문제는 채점 실패해도 정답 추출 시도 (이미 선택지 클릭했으므로)
         if (isLastProblem) {
           console.log(`[FLOW] 27번 문제: 채점 대기 실패했지만 정답 추출 시도...`);
-          await new Promise(resolve => setTimeout(resolve, 50));
+          await new Promise(resolve => setTimeout(resolve, 25));
           correctAnswer = detectCorrectAnswer();
           explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
           if (correctAnswer) {
@@ -368,7 +484,18 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         
         // 채점 완료 후 정답 표시가 DOM에 완전히 반영될 때까지 추가 대기
         console.log(`[FLOW] 정답 표시 DOM 반영 대기 중...`);
-        await new Promise(resolve => setTimeout(resolve, 120)); // DOM 반영 대기
+        await new Promise(resolve => setTimeout(resolve, 25)); // DOM 반영 대기
+
+        // 해설 DOM이 나올 때까지 최대 2초 폴링 (해설이 늦게 렌더되는 문제 대응)
+        const explanationWaitDeadline = Date.now() + 2000;
+        while (Date.now() < explanationWaitDeadline) {
+          const root = findSatRoot();
+          if (root && root.querySelector('[class*="explanation"], [class*="해설"], [class*="solution"]')) {
+            console.log(`[FLOW] ✓ 해설 DOM 확인 (${Date.now() - (explanationWaitDeadline - 2000)}ms 대기)`);
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 40));
+        }
         
         // 정답 표시가 실제로 나타났는지 재확인
         let retryCount = 0;
@@ -383,17 +510,29 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
               break;
             }
           }
-          await new Promise(resolve => setTimeout(resolve, 120));
+          await new Promise(resolve => setTimeout(resolve, 25));
           retryCount++;
         }
-        
+        // #region agent log
+        if (!answerMarkingFound) {
+          const satRoot = findSatRoot();
+          const hasExplanationDom = satRoot ? !!satRoot.querySelector('[class*="explanation"], [class*="해설"], [class*="solution"]') : false;
+          fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:answerMarkingNotFound',message:'answerMarkingFound false after 5 retries',data:{currentProblemNum,hasExplanationDom,gradingResult:true},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+        }
+        // #endregion
+
         // 정답 표시가 확인되면 즉시 정답 추출 (DOM이 변경되기 전에)
         if (answerMarkingFound) {
           console.log(`[FLOW] 정답 추출 시도 중 (채점 직후)...`);
           // #region agent log
+          (function () {
+            const satRoot = findSatRoot();
+            const hasExplanationDom = satRoot ? !!satRoot.querySelector('[class*="explanation"], [class*="해설"], [class*="solution"]') : false;
+            fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:beforeExtractAnswer',message:'before extract answer (answerMarkingFound=true)',data:{currentProblemNum,hasExplanationDom},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+          })();
+          // #endregion
           const beforeExtractProblemNum = getCurrentProblemNumber();
           fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:beforeExtract',message:'before extracting answer and explanation',data:{currentProblemNum,beforeExtractProblemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
           correctAnswer = detectCorrectAnswer();
           const beforeExplanationProblemNum = getCurrentProblemNumber();
           explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
@@ -407,7 +546,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
           } else {
             console.warn(`[FLOW] ✗ 정답 추출 실패 (채점 직후 시도)`);
             // 추가 대기 후 재시도
-            await new Promise(resolve => setTimeout(resolve, 120));
+            await new Promise(resolve => setTimeout(resolve, 25));
             // #region agent log
             const retryProblemNum = getCurrentProblemNumber();
             fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:retryExtract',message:'retrying answer extraction',data:{currentProblemNum,retryProblemNum},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
@@ -426,7 +565,17 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         }
       }
     } else {
-      console.log(`[FLOW] 이미 채점된 상태입니다.`);
+      console.log(`[FLOW] 이미 채점된 상태입니다 (해설 DOM 있음).`);
+      // #region agent log
+      fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:skipChoicePath',message:'skipping choice click (alreadyGraded && hasExplanation)',data:{currentProblemNum},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      // graded든 아니든 게이트: root 기준 선지 4개 확보 필수 (document 기준 root)
+      const rootGraded = getSatRootForChoices();
+      await ensureChoicesVisible({ root: rootGraded, maxScrollAttempts: 16, problemNumber: currentProblemNum });
+      await new Promise(r => setTimeout(r, 50));
+      const choicesGraded = extractChoices(rootGraded);
+      console.log(`[FLOW] graded 문제 ${currentProblemNum} choices ${choicesGraded.length}개 확인 후 정답 추출 진행`);
+      choiceClickedThisProblem = true; // graded는 클릭 생략하지만, 선지 4개 확보했으므로 Next 허용
       // 이미 채점된 상태에서도 정답 추출 시도
       correctAnswer = detectCorrectAnswer();
       const beforeAlreadyGradedExplanationProblemNum = getCurrentProblemNumber();
@@ -437,9 +586,9 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       // BUG FIX: 모듈 2 문제 1 - isGraded가 오탐할 수 있음 (신규 화면). 정답 없으면 클릭 경로 재시도
       if (!correctAnswer && moduleNumber === 2 && currentProblemNum === 1) {
         console.log(`[FLOW] 모듈 2 문제 1: 이미 채점 판별했으나 정답 없음. 선택지 클릭 경로 재시도...`);
-        const retryClicked = await clickFirstChoice(sectionType);
+        const retryClicked = await clickFirstChoice(sectionType, rootRef);
         if (retryClicked) {
-          await new Promise(resolve => setTimeout(resolve, 120));
+          await new Promise(resolve => setTimeout(resolve, 25));
           correctAnswer = detectCorrectAnswer();
           explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
           if (correctAnswer) {
@@ -455,6 +604,12 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
     
     if (!problem) {
       // 27번 문제가 아니면 일반적으로 문제 추출
+      // 사진/도표/표 있는 문제: 그림 캡처(extractFigures) 전에 DOM 안정화 대기 (2~3초 걸릴 수 있음)
+      if (currentProblemHasImage()) {
+        const figureStabilizeMs = 2500;
+        console.log(`[FLOW] 이미지/도표 문제: 그림 캡처 전 ${figureStabilizeMs}ms 대기...`);
+        await new Promise(resolve => setTimeout(resolve, figureStabilizeMs));
+      }
       console.log(`[FLOW] 문제 추출 중...`);
       // #region agent log
       fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:beforeExtractCurrentProblem',message:'math image extract debug: before extract',data:{sectionType,currentProblemNum,isLastProblem},timestamp:Date.now(),hypothesisId:'H5'})}).catch(()=>{});
@@ -462,7 +617,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       problem = await extractCurrentProblem(sectionType);
       // 추출 직후 DOM/렌더링 안정화 대기 (다음 문제로 넘어가기 전에 추출이 완전히 반영되도록)
       if (problem) {
-        await new Promise(resolve => setTimeout(resolve, 150));
+        await new Promise(resolve => setTimeout(resolve, 80));
       }
       // #region agent log
       fetch('http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:afterExtractCurrentProblem',message:'math image extract debug: after extract',data:{sectionType,currentProblemNum,problemNull:problem===null,figuresLength:problem?.figures?.length??'n/a'},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
@@ -472,7 +627,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       // 27번 문제는 이미 추출했으므로 정답 추출 시도 (채점 완료 여부와 관계없이)
         if (isLastProblem && !correctAnswer) {
         console.log(`[FLOW] 27번 문제: 정답 추출 재시도 중...`);
-        await new Promise(resolve => setTimeout(resolve, 50)); // 화면 전환 대기
+        await new Promise(resolve => setTimeout(resolve, 25)); // 화면 전환 대기
         correctAnswer = detectCorrectAnswer();
         explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || '';
         if (correctAnswer) {
@@ -609,7 +764,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
         break;
       }
       console.log(`[FLOW] 추출 재시도 대기 후 같은 문제 다시 시도 (${consecutiveExtractFailures}/${maxExtractRetries})...`);
-      await new Promise(resolve => setTimeout(resolve, 800));
+      await new Promise(resolve => setTimeout(resolve, 120));
       continue;
     }
 
@@ -670,10 +825,20 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       break;
     }
     
+    // 선지 미클릭 시 다음 문제로 절대 넘어가지 않음
+    console.log(`[FLOW-CHOICE] 가드 직전: choiceClickedThisProblem=${choiceClickedThisProblem}, currentProblemNum=${currentProblemNum}`);
+    if (!choiceClickedThisProblem) {
+      console.error(`[FLOW-CHOICE] 차단: 선지 미선택 상태에서 다음으로 넘어갈 수 없음. 같은 문제 재시도. (문제 ${currentProblemNum})`);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      continue;
+    }
+
     // 다음 문제로 이동
     const problemNumBeforeNext = getCurrentProblemNumber();
+    console.log(`[FLOW-CHOICE] 다음 버튼 클릭 허용 (선지 선택 완료). 문제 ${problemNumBeforeNext} → 다음`);
     console.log(`[FLOW] 다음 문제로 이동 중... (현재: ${problemNumBeforeNext})`);
     // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:beforeNextClick',message:'before clicking next button',data:{problemNumBeforeNext,currentProblemNum,explanationLength:explanation?explanation.length:0,correctAnswer},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
     fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'moduleRunner.js:beforeNext',message:'before moving to next problem',data:{problemNumBeforeNext,currentProblemNum,collectedNumbers:Array.from(collectedNumbers),targetArrayLength:targetArray.length,maxProblems,TEMP_MODE},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
     // #endregion
     
@@ -705,7 +870,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       await waitForContentLoad(CONFIG.timeouts.screenTransition);
       
       // 문제 번호가 정확히 +1 증가했는지 확인 (여러 번 읽어서 정확도 향상)
-      await new Promise(resolve => setTimeout(resolve, 120)); // DOM 업데이트 대기
+      await new Promise(resolve => setTimeout(resolve, 25)); // DOM 업데이트 대기
       afterProblemNum = getCurrentProblemNumber();
       
       // Progress에서도 확인
@@ -770,7 +935,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
               
               for (let i = 0; i < jumpSize - 1; i++) {
                 previousButton.click();
-                await new Promise(resolve => setTimeout(resolve, 50));
+                await new Promise(resolve => setTimeout(resolve, 25));
                 await waitForContentLoad(CONFIG.timeouts.screenTransition);
               }
               
@@ -802,7 +967,7 @@ export async function collectModuleProblems(allData, sectionType, moduleName) {
       } else if (afterProblemNum <= problemNumBeforeNext) {
         // 문제 번호가 증가하지 않았거나 감소함
         console.warn(`[FLOW] 문제 번호가 증가하지 않음: ${problemNumBeforeNext} → ${afterProblemNum}. 재시도...`);
-        await new Promise(resolve => setTimeout(resolve, 120));
+        await new Promise(resolve => setTimeout(resolve, 25));
         continue;
       }
     }

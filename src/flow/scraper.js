@@ -2,9 +2,10 @@
 // Extracted from stateMachine.js to separate concerns
 
 import { CONFIG, TEMP_MODE } from '../config/constants.js';
-import { waitForCondition, waitForContentLoad, safeClick, showToast } from '../dom/wait.js';
+import { waitForCondition, waitForContentLoad, safeClick, forceClick, showToast } from '../dom/wait.js';
 import { isQuestionScreen, getCurrentProblemNumber, getProgressState, isModuleStartScreen } from '../dom/extract.js';
 import { findButtonByText, findNavigationButton, clickSubmitWithConfirmation } from '../dom/buttons.js';
+import { deepQuerySelectorAll, isElementVisible } from '../dom/deepQuery.js';
 import { SATNavigator } from './navigator.js';
 import { startNextModule, startModule2, configureAndStartTest, clickSectionContinue } from './navigator.js';
 import { collectModuleProblems } from './moduleRunner.js';
@@ -244,7 +245,7 @@ export class SATScraper {
         }
         
         // 추가 대기: 화면이 완전히 로드될 때까지
-        await new Promise(resolve => setTimeout(resolve, 400));
+        await new Promise(resolve => setTimeout(resolve, 150));
         
         // #region agent log
         fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'scraper.js:afterModule1SubmitWait',message:'after module 1 submit wait',data:{isQuestionScreen:isQuestionScreen(),progressState:getProgressState(),bodyText:(document.body.innerText||'').substring(0,200),hasModule2Text:(document.body.innerText||'').toLowerCase().includes('모듈 2'),module2ScreenReady},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
@@ -257,7 +258,7 @@ export class SATScraper {
         
         // BUG FIX: 제출 버튼을 찾지 못했지만 Module 2 시작 화면이 나타났는지 확인
         console.log('[SAT-DEBUG] 제출 버튼을 찾지 못했지만 Module 2 시작 화면 확인 중...');
-        await new Promise(resolve => setTimeout(resolve, 350)); // 화면 전환 대기
+        await new Promise(resolve => setTimeout(resolve, 150)); // 화면 전환 대기
         
         const bodyTextAfterWait = (document.body.innerText || document.body.textContent || '').toLowerCase();
         const hasModule2AfterWait = bodyTextAfterWait.includes('모듈 2') || bodyTextAfterWait.includes('module 2') || 
@@ -305,7 +306,7 @@ export class SATScraper {
       }
       
       // 추가 대기: 화면이 완전히 로드될 때까지
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 150));
       
       // NOTE: startNextModule is imported from navigator.js
       console.log('[SAT-DEBUG] 모듈 2 시작 버튼 클릭 시도...');
@@ -473,17 +474,54 @@ export class SATScraper {
       showToast('Math 섹션 시작 중...', 'info');
 
       // Math 섹션 시작 버튼 찾기 및 클릭
-      // NOTE: safeClick, clickSectionContinue, configureAndStartTest are imported above
-      // 1차: 텍스트 기반 버튼 탐색 (위에서 찾은 mathStartButton / mathSectionButton 사용)
-      if (mathStartButton) {
-        console.log('[SATScraper] Math 시작 버튼 클릭');
-        await safeClick(mathStartButton);
-        await waitForContentLoad(CONFIG.timeouts.screenTransition);
-      } else if (mathSectionButton) {
+      // 1순위: span.mat-mdc-button-touch-target + Math 섹션 컨텍스트 (Angular Material)
+      let mathButtonClicked = false;
+      const touchTargets = deepQuerySelectorAll('span.mat-mdc-button-touch-target');
+      for (const span of touchTargets) {
+        const btn = span.closest('button');
+        if (!btn || btn.disabled || !isElementVisible(btn)) continue;
+        const labelEl = btn.querySelector('.mdc-button__label');
+        const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || '').trim().toLowerCase();
+        let ancestor = btn.parentElement;
+        let inMathContext = false;
+        for (let i = 0; i < 15 && ancestor; i++) {
+          const t = (ancestor.innerText || ancestor.textContent || '').toLowerCase();
+          if (t.includes('math') || t.includes('수학')) { inMathContext = true; break; }
+          ancestor = ancestor.parentElement;
+        }
+        if ((btnText.includes('시작') || btnText === 'start') && (inMathContext || hasMathText)) {
+          console.log('[SATScraper] Math 시작 버튼 발견 (mat-mdc-button-touch-target)');
+          btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await new Promise(resolve => setTimeout(resolve, 150));
+          let clicked = await safeClick(btn);
+          if (!clicked) clicked = await forceClick(btn);
+          if (clicked) {
+            mathButtonClicked = true;
+            await waitForContentLoad(CONFIG.timeouts.screenTransition);
+          }
+          break;
+        }
+      }
+
+      if (!mathButtonClicked && mathStartButton) {
+        console.log('[SATScraper] Math 시작 버튼 클릭 (텍스트 기반)');
+        let clicked = await safeClick(mathStartButton);
+        if (!clicked) clicked = await forceClick(mathStartButton);
+        if (clicked) {
+          mathButtonClicked = true;
+          await waitForContentLoad(CONFIG.timeouts.screenTransition);
+        }
+      }
+      if (!mathButtonClicked && mathSectionButton) {
         console.log('[SATScraper] Math 섹션 버튼 클릭');
-        await safeClick(mathSectionButton);
-        await waitForContentLoad(CONFIG.timeouts.screenTransition);
-      } else {
+        let clicked = await safeClick(mathSectionButton);
+        if (!clicked) clicked = await forceClick(mathSectionButton);
+        if (clicked) {
+          mathButtonClicked = true;
+          await waitForContentLoad(CONFIG.timeouts.screenTransition);
+        }
+      }
+      if (!mathButtonClicked) {
         // 2차: Math 섹션 카드의 시작 버튼 탐색 (여러 카드 중 Math 카드만 선택)
         let explicitMathButton = null;
         const sectionCards = document.querySelectorAll('glowing-card.section-card, .section-card, section-overview [class*="section-card"]');
@@ -512,8 +550,11 @@ export class SATScraper {
 
         if (explicitMathButton) {
           console.log('[SATScraper] CSS 셀렉터 기반 Math 시작 버튼 발견. 클릭 시도...', explicitMathButton);
-          await safeClick(explicitMathButton);
-          await waitForContentLoad(CONFIG.timeouts.screenTransition);
+          explicitMathButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await new Promise(resolve => setTimeout(resolve, 150));
+          let clicked = await safeClick(explicitMathButton);
+          if (!clicked) clicked = await forceClick(explicitMathButton);
+          if (clicked) await waitForContentLoad(CONFIG.timeouts.screenTransition);
         } else {
           // 3차: fallback - 기존 섹션 continue 로직 재사용
           const mathStarted = await clickSectionContinue('Math');

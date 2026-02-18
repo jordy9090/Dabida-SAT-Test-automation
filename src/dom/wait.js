@@ -3,6 +3,103 @@
 
 import { CONFIG } from '../config/constants.js';
 import { isElementVisible } from './deepQuery.js';
+import { findSatRoot } from './query.js';
+import { installNavGuard, uninstallNavGuard, installClickLogger } from './navGuard.js';
+import { NAV_GUARD_MAIN_SOURCE } from './navGuardMainSource.js';
+
+let exportRunning = false;
+let clickLoggerRemove = null;
+const mainInjectedByDoc = new WeakMap();
+
+const EXPORT_MSG = { type: 'SAT_EXPORT_RUNNING' };
+
+/**
+ * 단일 document에 MAIN world NAV GUARD 주입. 성공 시 true.
+ */
+function injectNavGuardMainIntoDocument(doc, frameLabel) {
+  try {
+    if (mainInjectedByDoc.get(doc)) return true;
+    if (!doc.head && !doc.documentElement) return false;
+    const script = doc.createElement('script');
+    script.textContent = NAV_GUARD_MAIN_SOURCE;
+    (doc.head || doc.documentElement).appendChild(script);
+    script.remove();
+    mainInjectedByDoc.set(doc, true);
+    console.log('[EXPORT] MAIN injected into frame', { frame: frameLabel, href: doc.defaultView?.location?.href || doc.URL });
+    return true;
+  } catch (e) {
+    console.warn('[NAVGUARD] MAIN inject error', frameLabel, e);
+    return false;
+  }
+}
+
+/**
+ * 현재 document + 접근 가능한 모든 iframe + (iframe인 경우) top document에 MAIN 가드 주입.
+ */
+function ensureNavGuardMainInjectedAllFrames() {
+  const win = typeof window !== 'undefined' ? window : null;
+  if (!win || !win.document) return;
+  const isTop = win === win.top;
+  injectNavGuardMainIntoDocument(win.document, isTop ? 'top' : 'iframe-self');
+  try {
+    for (let i = 0; i < win.frames.length; i++) {
+      const f = win.frames[i];
+      try {
+        if (f.document && !mainInjectedByDoc.get(f.document)) {
+          injectNavGuardMainIntoDocument(f.document, 'frame-' + i + '-' + (f.location?.href || '').slice(0, 50));
+        }
+      } catch (e) {
+        console.warn('[EXPORT] frame inject skip (same-origin?)', i, e?.message);
+      }
+    }
+    if (!isTop && win.top && win.top.document) {
+          injectNavGuardMainIntoDocument(win.top.document, 'top-from-iframe');
+    }
+  } catch (e) {
+    console.warn('[EXPORT] frames iteration error', e);
+  }
+}
+
+/** 내보내기 실행 중 외부/위험 탭 열기 원천 차단. 진단 로그 + MAIN 전역 주입 + postMessage(현재+top) + background 연동. */
+export function setExportRunning(running) {
+  exportRunning = !!running;
+  const frameHref = typeof location !== 'undefined' ? location.href : '';
+  const isTop = typeof window !== 'undefined' && window === window.top;
+  console.log('[EXPORT] setExportRunning', { running: exportRunning, frameHref, isTop });
+
+  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    try {
+      chrome.runtime.sendMessage({ type: 'EXPORT_RUNNING', value: exportRunning }).catch(() => {});
+    } catch (e) {}
+  }
+
+  if (exportRunning) {
+    ensureNavGuardMainInjectedAllFrames();
+    const msg = Object.assign({}, EXPORT_MSG, { value: true });
+    try {
+      window.postMessage(msg, '*');
+    } catch (e) {}
+    try {
+      if (window.top && window.top !== window) window.top.postMessage(msg, '*');
+    } catch (e) {}
+    installNavGuard(() => exportRunning);
+    if (clickLoggerRemove) clickLoggerRemove();
+    clickLoggerRemove = installClickLogger(() => exportRunning);
+  } else {
+    const msg = Object.assign({}, EXPORT_MSG, { value: false });
+    try {
+      window.postMessage(msg, '*');
+    } catch (e) {}
+    try {
+      if (window.top && window.top !== window) window.top.postMessage(msg, '*');
+    } catch (e) {}
+    uninstallNavGuard();
+    if (clickLoggerRemove) {
+      clickLoggerRemove();
+      clickLoggerRemove = null;
+    }
+  }
+}
 
 export async function waitForElement(selector, retries = CONFIG.retries.elementFind, interval = CONFIG.timeouts.elementWait) {
   for (let i = 0; i < retries; i++) {
@@ -37,7 +134,7 @@ export async function waitForCondition(condition, maxWait = CONFIG.timeouts.maxE
   return false;
 }
 
-export function waitForContentLoad(delay = 1000) {
+export function waitForContentLoad(delay = 150) {
   return new Promise((resolve) => {
     // MutationObserver로 DOM 변경 감지
     let observer;
@@ -118,6 +215,8 @@ export async function forceClick(button, retries = 3) {
   // 현재 URL 저장 (클릭 후 변경 확인용)
   const currentUrl = window.location.href;
   
+  const MIN_RECT_SIZE = 5;
+
   for (let i = 0; i < retries; i++) {
     try {
       console.log(`[SAT-DEBUG] forceClick 시도 ${i + 1}/${retries}`);
@@ -129,6 +228,35 @@ export async function forceClick(button, retries = 3) {
       const rect = button.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
+
+      const rectInvalid = typeof rect.width !== 'number' || typeof rect.height !== 'number' ||
+        Number.isNaN(rect.width) || Number.isNaN(rect.height) ||
+        rect.width < MIN_RECT_SIZE || rect.height < MIN_RECT_SIZE;
+      if (rectInvalid) {
+        console.warn('[SAFECLICK] forceClick BAD_RECT: abort', { width: rect.width, height: rect.height });
+        if (i === retries - 1) return false;
+        await new Promise(resolve => setTimeout(resolve, 250));
+        continue;
+      }
+
+      const topEl = document.elementFromPoint(centerX, centerY);
+      const satRoot = findSatRoot();
+      const anchor = topEl?.tagName === 'A' ? topEl : topEl?.closest?.('a');
+      const href = anchor?.getAttribute('href') || '';
+      if (href && (href.includes('support.google.com') || href.includes('policies.google.com'))) {
+        console.warn('[SAFECLICK] forceClick blocked: 링크(개인정보/도움말) 클릭 방지', { cx: centerX, cy: centerY, topElTag: topEl?.tagName, href });
+        return false;
+      }
+      if (topEl && satRoot && satRoot !== document.body && !satRoot.contains(topEl)) {
+        console.warn('[SAFECLICK] forceClick blocked click outside satRoot', { cx: centerX, cy: centerY, topElTag: topEl.tagName, href: href || null });
+        return false;
+      }
+      if (!topEl) {
+        console.warn('[SAFECLICK] forceClick blocked: no element at point', { cx: centerX, cy: centerY });
+        if (i === retries - 1) return false;
+        await new Promise(resolve => setTimeout(resolve, 250));
+        continue;
+      }
       
       // pointerdown -> mousedown -> click 순서
       const pointerDownEvent = new PointerEvent('pointerdown', {
@@ -248,8 +376,30 @@ export async function safeClick(button, retries = CONFIG.retries.buttonClick) {
 
   for (let i = 0; i < retries; i++) {
     try {
+      // #region agent log
+      fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'wait.js:safeClick:attempt',message:'OPEN_CLICK safeClick attempt',data:{attempt:i+1,retries,tagName:button?.tagName},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
+      console.warn('[OPEN_CLICK] safeClick attempt', { attempt: i + 1, retries, tagName: button?.tagName });
       button.scrollIntoView({ behavior: 'smooth', block: 'center' });
       await new Promise(resolve => setTimeout(resolve, CONFIG.timeouts.scrollDelay));
+
+      const rect = button.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const topEl = document.elementFromPoint(cx, cy);
+      const anchor = topEl?.tagName === 'A' ? topEl : topEl?.closest?.('a');
+      const hitHref = anchor?.getAttribute('href') || '';
+      if (hitHref && (hitHref.includes('support.google.com') || hitHref.includes('policies.google.com'))) {
+        console.warn('[SAFECLICK] safeClick: 해당 좌표에 개인정보/도움말 링크 있음, 클릭 스킵', { cx, cy, href: hitHref });
+        return false;
+      }
+      if (topEl && !button.contains(topEl) && !topEl.contains(button)) {
+        const extHref = topEl.tagName === 'A' ? topEl.getAttribute('href') : (topEl.closest?.('a')?.getAttribute('href') || '');
+        if (extHref && extHref.startsWith('http')) {
+          console.warn('[SAFECLICK] safeClick: 클릭 좌표가 버튼 밖 외부 링크 위', { cx, cy, topElTag: topEl.tagName });
+          return false;
+        }
+      }
       
       // 실제 유저 클릭처럼 동작하도록 dispatchEvent 사용
       const mouseEvent = new MouseEvent('click', {

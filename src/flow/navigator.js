@@ -5,7 +5,8 @@ import { CONFIG } from '../config/constants.js';
 import { deepQuerySelectorAll, isElementVisible } from '../dom/deepQuery.js';
 import { waitForElement, waitForCondition, waitForContentLoad, safeClick, showToast, forceClick } from '../dom/wait.js';
 import { isQuestionScreen, getProgressState, getCurrentProblemNumber, isModuleStartScreen } from '../dom/extract.js';
-import { findButtonByText } from '../dom/buttons.js';
+import { findButtonByText, findButtonByTextInRoot } from '../dom/buttons.js';
+import { findSatRoot } from '../dom/query.js';
 
 export class SATNavigator {
   /**
@@ -26,21 +27,23 @@ export class SATNavigator {
   }
 
   /**
-   * '열기' 버튼 찾기 및 클릭
+   * '열기' 버튼 찾기 및 클릭. 후보는 <button> 또는 role="button"만 허용, <a>/href/target=_blank 완전 제외.
    * @returns {Promise<boolean>} 성공 여부
    */
   async clickOpenButton() {
-    console.log('[SAT-DEBUG] 현재 단계: 열기 버튼 찾기 시작');
-    
+    const OPEN_WHITELIST = ['열기', 'Open', 'Start', '시작', '테스트 시작', 'Start Test', '모듈 시작'];
+    console.log('[SAT-DEBUG] 현재 단계: 열기 버튼 찾기 시작 (button/role=button만)');
+
     const openButton = await waitForElement(() => {
-      // Shadow DOM 돌파: deepQuerySelectorAll 사용
-      const allButtons = deepQuerySelectorAll(CONFIG.selectors.button + ', a, div[onclick], span[onclick]');
-      for (const btn of allButtons) {
+      const candidates = deepQuerySelectorAll('button, [role="button"]');
+      for (const btn of candidates) {
         try {
+          if (btn.tagName === 'A' || btn.hasAttribute('href') || btn.getAttribute('target') === '_blank' || btn.getAttribute('target') === '_new') continue;
           if (!isElementVisible(btn) || btn.disabled) continue;
-          
           const btnText = (btn.innerText || btn.textContent || '').trim();
-          if (CONFIG.buttonTexts.open.some(text => btnText.includes(text))) {
+          const ariaLabel = (btn.getAttribute('aria-label') || '').trim();
+          const matches = OPEN_WHITELIST.some(t => btnText.includes(t) || ariaLabel.includes(t));
+          if (matches) {
             console.log('[SAT-DEBUG] 열기 버튼 발견:', btnText);
             return btn;
           }
@@ -51,13 +54,34 @@ export class SATNavigator {
       return null;
     }, CONFIG.retries.elementFind);
 
-    if (openButton) {
-      console.log('[SATNavigator] 열기 버튼 발견, 클릭 시도');
-      return await safeClick(openButton);
+    if (!openButton) {
+      console.warn('[SATNavigator] 열기 버튼을 찾을 수 없습니다.');
+      return false;
     }
-    
-    console.warn('[SATNavigator] 열기 버튼을 찾을 수 없습니다.');
-    return false;
+
+    const rect = openButton.getBoundingClientRect();
+    const candidateMeta = {
+      tagName: openButton.tagName,
+      role: openButton.getAttribute('role') || '',
+      text: (openButton.innerText || openButton.textContent || '').trim().slice(0, 80),
+      href: openButton.getAttribute('href') || (openButton.href || ''),
+      target: openButton.getAttribute('target') || '',
+      hasOnclick: !!openButton.getAttribute('onclick'),
+      outerHTMLSlice: (openButton.outerHTML || '').slice(0, 200),
+      rect: { width: rect.width, height: rect.height, top: rect.top, left: rect.left },
+      frameHref: typeof location !== 'undefined' ? location.href : '',
+    };
+    console.warn('[OPEN_CLICK] about_to_click', { candidateMeta, stack: (new Error().stack || '').split('\n').slice(2).join('\n') });
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'navigator.js:clickOpenButton:about_to_click',message:'OPEN_CLICK about_to_click',data:{candidateMeta},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+
+    const result = await safeClick(openButton);
+    console.warn('[OPEN_CLICK] clicked', { result, candidateTag: openButton.tagName });
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'navigator.js:clickOpenButton:clicked',message:'OPEN_CLICK clicked',data:{result,candidateTag:openButton.tagName},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    return result;
   }
 
   /**
@@ -127,17 +151,74 @@ export class SATNavigator {
    * @returns {Promise<boolean>} 성공 여부
    */
   async handleInitialNavigation() {
-    console.log('[SAT-DEBUG] 현재 단계: 자동 진입 시퀀스 시작');
-    
     try {
-      // 이미 문제 화면에 있으면 스킵
-      if (isQuestionScreen() || getProgressState() !== null) {
-        console.log('[SAT-DEBUG] 이미 문제 화면에 있습니다.');
+      const w = typeof window !== 'undefined' ? window : null;
+      const topConsole = w?.top?.console;
+      if (topConsole && topConsole.warn) {
+        topConsole.warn('[NAV_INIT] ★ handleInitialNavigation 호출됨 (이 프레임)', w?.location?.href || '', 'isTop=', w === w?.top);
+      }
+    } catch (_) {}
+    const progress = getProgressState();
+    const isQuestion = isQuestionScreen();
+    const problemNum = getCurrentProblemNumber();
+    const isModuleStart = isModuleStartScreen();
+    const satRoot = findSatRoot();
+    const hasNextInSatRoot = satRoot ? !!satRoot.querySelector('[data-testid="next-button"]') : false;
+    const progressMatch = progress && progress.match(/\s*(\d+)\s*\/\s*(\d+)\s*/);
+    const progressNum = progressMatch ? parseInt(progressMatch[1], 10) : null;
+    const hasChoices = !!(document.querySelector('[role="radio"]') || document.querySelector('button[aria-label*="Choice"]') || document.querySelector('[class*="option"]'));
+    const allState = {
+      href: typeof location !== 'undefined' ? location.href : '',
+      isTop: typeof window !== 'undefined' && window === window.top,
+      isQuestion,
+      progress,
+      problemNum,
+      isModuleStart,
+      hasNextInSatRoot,
+      progressNum,
+      hasChoices,
+      stack: (new Error().stack || '').split('\n').slice(2).join('\n'),
+    };
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'navigator.js:handleInitialNavigation:entry',message:'NAV_INIT entry',data:allState,timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    console.warn('[NAV_INIT] handleInitialNavigation entry', allState);
+    try {
+      if (window?.top?.console?.warn) {
+        window.top.console.warn('[NAV_INIT] handleInitialNavigation entry (top에 표시)', allState);
+      }
+    } catch (_) {}
+
+    try {
+      // 이미 문제 화면/모듈 진행 화면이면 1단계(열기 클릭) 완전 스킵
+      if (isQuestion) {
+        console.warn('[NAV_INIT] skip_open_click_because_already_in_question', { reason: 'isQuestionScreen', progress, problemNum });
+        try { window?.top?.console?.warn?.('[NAV_INIT] skip (isQuestionScreen)', { progress, problemNum }); } catch(_){}
+        return true;
+      }
+      if (progress != null && progressNum >= 1 && hasChoices) {
+        console.warn('[NAV_INIT] skip_open_click_because_already_in_question', { reason: 'progress_and_choices', progress, progressNum, hasChoices });
+        try { window?.top?.console?.warn?.('[NAV_INIT] skip (progress_and_choices)', { progress }); } catch(_){}
+        return true;
+      }
+      if (hasNextInSatRoot) {
+        console.warn('[NAV_INIT] skip_open_click_because_already_in_question', { reason: 'next_button_in_sat_root', progress });
+        try { window?.top?.console?.warn?.('[NAV_INIT] skip (next_in_sat_root)', { progress }); } catch(_){}
+        return true;
+      }
+      if (progress !== null) {
+        console.warn('[NAV_INIT] skip (progress !== null)');
+        try { window?.top?.console?.warn?.('[NAV_INIT] skip (progress not null)'); } catch(_){}
         return true;
       }
 
       // 1단계: '열기' 버튼 클릭 (텍스트 기반 탐색)
-      console.log('[SAT-DEBUG] 현재 단계: 1단계 - 열기 버튼 클릭');
+      const step1State = { ...allState, step: 'step1_open_click' };
+      // #region agent log
+      fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'navigator.js:handleInitialNavigation:step1_enter',message:'NAV_INIT step1_enter',data:step1State,timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      console.warn('[NAV_INIT] step1_enter', step1State);
+      try { window?.top?.console?.warn?.('[NAV_INIT] ★ step1_enter - 열기 버튼 클릭 단계 진입', step1State); } catch(_){}
       showToast('열기 버튼 클릭 중...', 'info');
       const openClicked = await this.clickOpenButton();
       if (openClicked) {
@@ -274,7 +355,7 @@ export class SATNavigator {
               if (startText.includes('시작') || startText === 'start' || startText.includes('start')) {
                 console.log('[SAT PDF Exporter] Math 섹션 시작 버튼 클릭');
                 startBtn.click();
-                await waitForContentLoad(800);
+                await waitForContentLoad(300);
                 return true;
               }
             }
@@ -286,7 +367,7 @@ export class SATNavigator {
     // 스크롤 다운하여 Math 섹션 찾기
     const originalScroll = window.scrollY;
     window.scrollTo(0, document.body.scrollHeight);
-    await waitForContentLoad(600);
+    await waitForContentLoad(200);
     
     // 스크롤 후 다시 찾기
     const scrolledMathButtons = document.querySelectorAll('button, a, [role="button"]');
@@ -299,7 +380,7 @@ export class SATNavigator {
             (text.includes('시작') || text === 'start')) {
           console.log('[SAT PDF Exporter] Math 섹션 시작 버튼 클릭 (스크롤 후)');
           button.click();
-          await waitForContentLoad(800);
+          await waitForContentLoad(300);
           return true;
         }
       }
@@ -364,17 +445,60 @@ export async function configureAndStartTest() {
     console.warn('[SAT PDF Exporter] 각 답변 다음에 정답 표시 토글을 찾을 수 없습니다.');
   }
   
-  // '테스트 시작' 버튼 찾기 및 클릭
-  const startTestButton = findButtonByText('테스트 시작', 'Start Test', '시작', 'Start');
-  if (startTestButton) {
-    console.log('[SAT PDF Exporter] 테스트 시작 버튼 클릭');
-    startTestButton.click();
-    await waitForContentLoad(800);
-    return true;
-  } else {
-    console.warn('[SAT PDF Exporter] 테스트 시작 버튼을 찾을 수 없습니다.');
-    return false;
+  // '테스트 시작' 버튼 찾기 및 클릭 (mat-mdc-button-touch-target 우선 사용)
+  const START_TEST_LABELS = /테스트\s*시작|start\s*test/i;
+  let startTestButton = null;
+
+  // 1순위: span.mat-mdc-button-touch-target을 가진 버튼 중 텍스트 매칭
+  const touchTargets = deepQuerySelectorAll('span.mat-mdc-button-touch-target');
+  for (const span of touchTargets) {
+    const btn = span.closest('button');
+    if (!btn || btn.disabled || !isElementVisible(btn)) continue;
+    const labelEl = btn.querySelector('.mdc-button__label');
+    const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || '').trim();
+    if (START_TEST_LABELS.test(btnText)) {
+      startTestButton = btn;
+      console.log('[SAT PDF Exporter] 테스트 시작 버튼 발견 (mat-mdc-button-touch-target)');
+      break;
+    }
   }
+
+  // 2순위: 텍스트 기반 검색
+  if (!startTestButton) {
+    startTestButton = findButtonByText('테스트 시작', 'Start Test', 'Start test');
+  }
+
+  // 3순위: setup 영역(R/W, 토글) 내 버튼 검색
+  if (!startTestButton) {
+    const setupRoot = Array.from(document.querySelectorAll('activity-set, [class*="immersive"], [class*="card"], [class*="section"]')).find(el => {
+      const t = (el.innerText || el.textContent || '').toLowerCase();
+      return (t.includes('reading') && t.includes('writing')) || t.includes('테스트 시작') || t.includes('start test');
+    });
+    if (setupRoot) {
+      startTestButton = findButtonByTextInRoot(setupRoot, '테스트 시작', 'Start Test', 'Start test');
+      if (!startTestButton) {
+        const btns = deepQuerySelectorAll('button', setupRoot);
+        startTestButton = btns.find(b => !b.disabled && isElementVisible(b) && START_TEST_LABELS.test(b.innerText || b.textContent || '')) || null;
+      }
+    }
+  }
+
+  if (startTestButton) {
+    console.log('[SAT PDF Exporter] 테스트 시작 버튼 클릭 시도');
+    startTestButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    let clicked = await safeClick(startTestButton);
+    if (!clicked) {
+      console.log('[SAT PDF Exporter] safeClick 실패, forceClick 시도');
+      clicked = await forceClick(startTestButton);
+    }
+    if (clicked) {
+      await waitForContentLoad(300);
+      return true;
+    }
+  }
+  console.warn('[SAT PDF Exporter] 테스트 시작 버튼을 찾거나 클릭하지 못했습니다.');
+  return false;
 }
 
 /**
@@ -382,37 +506,71 @@ export async function configureAndStartTest() {
  * NOTE: Legacy function - migrated from legacy.js
  */
 export async function clickSectionContinue(sectionName) {
-  console.log(`[SAT PDF Exporter] ${sectionName} 섹션 계속 버튼 찾는 중...`);
+  console.log(`[SAT PDF Exporter] ${sectionName} 섹션 계속/시작 버튼 찾는 중...`);
   
-  // 섹션 카드 찾기
-  const sectionCards = document.querySelectorAll('[class*="card"], [class*="section"]');
-  for (const card of sectionCards) {
-    const cardText = (card.innerText || card.textContent || '').toLowerCase();
-    if (cardText.includes(sectionName.toLowerCase())) {
-      // 카드 내부의 '계속' 버튼 찾기
-      const continueButton = card.querySelector('button');
-      if (continueButton) {
-        const buttonText = (continueButton.innerText || continueButton.textContent || '').trim();
-        if (buttonText.includes('계속') || buttonText.includes('Continue') || buttonText.includes('Start')) {
-          console.log(`[SAT PDF Exporter] ${sectionName} 섹션 계속 버튼 클릭`);
-          continueButton.click();
-          await waitForContentLoad(800);
+  // 1순위: Math 섹션 - span.mat-mdc-button-touch-target (Angular Material)
+  if (sectionName.toLowerCase() === 'math') {
+    const touchTargets = deepQuerySelectorAll('span.mat-mdc-button-touch-target');
+    for (const span of touchTargets) {
+      const btn = span.closest('button');
+      if (!btn || btn.disabled || !isElementVisible(btn)) continue;
+      const labelEl = btn.querySelector('.mdc-button__label');
+      const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || '').trim().toLowerCase();
+      let ancestor = btn.parentElement;
+      let inMathContext = false;
+      for (let i = 0; i < 12 && ancestor; i++) {
+        const t = (ancestor.innerText || ancestor.textContent || '').toLowerCase();
+        if (t.includes('math') || t.includes('수학')) { inMathContext = true; break; }
+        ancestor = ancestor.parentElement;
+      }
+      if ((btnText.includes('시작') || btnText === 'start') && inMathContext) {
+        console.log(`[SAT PDF Exporter] ${sectionName} 섹션 시작 버튼 발견 (mat-mdc-button-touch-target)`);
+        btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await new Promise(resolve => setTimeout(resolve, 150));
+        let clicked = await safeClick(btn);
+        if (!clicked) clicked = await forceClick(btn);
+        if (clicked) {
+          await waitForContentLoad(300);
           return true;
         }
       }
     }
   }
   
-  // 폴백: 전체 페이지에서 '계속' 버튼 찾기
-  const continueButton = findButtonByText('계속', 'Continue', 'Start', '시작');
-  if (continueButton) {
-    console.log(`[SAT PDF Exporter] ${sectionName} 섹션 계속 버튼 클릭 (폴백)`);
-    continueButton.click();
-    await waitForContentLoad(800);
-    return true;
+  // 섹션 카드 찾기
+  const sectionCards = document.querySelectorAll('[class*="card"], [class*="section"]');
+  for (const card of sectionCards) {
+    const cardText = (card.innerText || card.textContent || '').toLowerCase();
+    if (cardText.includes(sectionName.toLowerCase())) {
+      const continueButton = card.querySelector('button');
+      if (continueButton && !continueButton.disabled && isElementVisible(continueButton)) {
+        const buttonText = (continueButton.innerText || continueButton.textContent || '').trim();
+        if (buttonText.includes('계속') || buttonText.includes('Continue') || buttonText.includes('Start') || buttonText.includes('시작')) {
+          console.log(`[SAT PDF Exporter] ${sectionName} 섹션 버튼 클릭`);
+          let clicked = await safeClick(continueButton);
+          if (!clicked) clicked = await forceClick(continueButton);
+          if (clicked) {
+            await waitForContentLoad(300);
+            return true;
+          }
+        }
+      }
+    }
   }
   
-  console.warn(`[SAT PDF Exporter] ${sectionName} 섹션 계속 버튼을 찾을 수 없습니다.`);
+  // 폴백: 전체 페이지에서 '계속'/'시작' 버튼 찾기
+  const continueButton = findButtonByText('계속', 'Continue', 'Start', '시작');
+  if (continueButton) {
+    console.log(`[SAT PDF Exporter] ${sectionName} 섹션 버튼 클릭 (폴백)`);
+    let clicked = await safeClick(continueButton);
+    if (!clicked) clicked = await forceClick(continueButton);
+    if (clicked) {
+      await waitForContentLoad(300);
+      return true;
+    }
+  }
+  
+  console.warn(`[SAT PDF Exporter] ${sectionName} 섹션 계속/시작 버튼을 찾을 수 없습니다.`);
   return false;
 }
 
@@ -729,7 +887,7 @@ export async function startNextModule() {
       // #endregion
       
       // 모듈이 시작되고 첫 문제가 로드될 때까지 충분히 대기
-      await waitForContentLoad(800);
+      await waitForContentLoad(300);
       // 추가 대기 (문제 로드 확인)
       await new Promise(resolve => setTimeout(resolve, 250));
       console.log('[SAT PDF Exporter] 모듈 2 시작 완료, 첫 문제 확인 중...');

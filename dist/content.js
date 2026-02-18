@@ -7860,17 +7860,59 @@
   });
 
   // src/dom/query.js
+  function findProgressEl(root = document) {
+    const sels = [
+      '[data-testid="progress-indicator"]',
+      '[data-testid="question-progress"]',
+      "learning-activity-progress",
+      'activity-set [class*="progress"]',
+      'activity-set [aria-label*="/"]',
+      '[class*="progress"]',
+      '[aria-label*="progress"]',
+      '[class*="indicator"]'
+    ];
+    const scope = root && root.querySelector ? root : document;
+    for (const s of sels) {
+      try {
+        const el = scope.querySelector(s);
+        if (el && (el.textContent || "").trim()) return el;
+      } catch (_) {
+      }
+    }
+    return null;
+  }
+  function readProgressNumber(root = document) {
+    const el = findProgressEl(root);
+    if (!el) return null;
+    const t = (el.textContent || "").trim();
+    const m = t.match(/(\d+)\s*\/\s*(\d+)/);
+    if (!m) return null;
+    const cur = Number(m[1]);
+    const total = Number(m[2]);
+    if (cur < 1 || total < 1 || cur > total || total !== 27 && total !== 22) return null;
+    return { cur, total, raw: m[0].trim() };
+  }
+  function findSatRootStable() {
+    const byActivity = document.querySelector("activity-set") || document.querySelector("learning-immersive-panel activity-set");
+    if (byActivity) {
+      return byActivity;
+    }
+    const byTestId = document.querySelector('[data-testid="activity-set"]');
+    if (byTestId) return byTestId;
+    const bySat = document.querySelector('[data-testid*="sat"], [data-testid*="question"], [data-testid*="problem"]');
+    if (bySat) return bySat;
+    return null;
+  }
   function findSatRoot() {
-    const testIdRoot = document.querySelector('[data-testid*="sat"], [data-testid*="question"], [data-testid*="problem"]');
-    if (testIdRoot) {
-      console.log("[DIAG] satRoot found by data-testid:", testIdRoot.tagName, testIdRoot.className);
-      return testIdRoot;
+    const stable = findSatRootStable();
+    if (stable) {
+      return stable;
     }
     const progressElements = deepQuerySelectorAll('[class*="progress"], [aria-label*="progress"], [class*="indicator"]');
     const choicesElements = deepQuerySelectorAll('[role="radio"], [class*="choice"], [class*="option"], button[aria-label*="Choice"]');
     for (const progressEl of progressElements) {
       if (!isElementVisible(progressEl)) continue;
-      const progressText = (progressEl.innerText || progressEl.textContent || "").trim();
+      const progressText = (progressEl.textContent || "").trim();
       if (!/\d+\s*\/\s*\d+/.test(progressText)) continue;
       for (const choiceEl of choicesElements) {
         if (!isElementVisible(choiceEl)) continue;
@@ -7884,13 +7926,6 @@
                 break;
               }
             }
-            const rect = commonAncestor.getBoundingClientRect();
-            console.log("[DIAG] satRoot found by progress+choices:", {
-              tag: commonAncestor.tagName,
-              class: commonAncestor.className?.split(" ")[0] || "none",
-              testid: commonAncestor.getAttribute("data-testid") || "none",
-              rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-            });
             return commonAncestor;
           }
           commonAncestor = commonAncestor.parentElement;
@@ -7898,23 +7933,14 @@
       }
     }
     const main = document.querySelector('main, [role="main"]');
-    if (main) {
-      const rect = main.getBoundingClientRect();
-      console.log("[DIAG] satRoot found by main:", {
-        tag: main.tagName,
-        class: main.className?.split(" ")[0] || "none",
-        testid: main.getAttribute("data-testid") || "none",
-        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-      });
-      return main;
-    }
+    if (main) return main;
     console.warn("[DIAG] satRoot not found, using body as fallback");
     return document.body;
   }
   function selectNextButton() {
     const allButtons = deepQuerySelectorAll('button, [role="button"], div[role="button"]');
-    const satRoot = findSatRoot();
-    console.log(`[SAT-DEBUG] selectNextButton: \uC804\uCCB4 \uD6C4\uBCF4 ${allButtons.length}\uAC1C, SAT root:`, satRoot ? satRoot.tagName : "null");
+    const satRoot2 = findSatRoot();
+    console.log(`[SAT-DEBUG] selectNextButton: \uC804\uCCB4 \uD6C4\uBCF4 ${allButtons.length}\uAC1C, SAT root:`, satRoot2 ? satRoot2.tagName : "null");
     const filteredCandidates = [];
     for (const btn of allButtons) {
       if (!isElementVisible(btn) || btn.disabled || btn.getAttribute("aria-disabled") === "true") continue;
@@ -7927,7 +7953,7 @@
         console.log("[SAT-DEBUG] header/nav/sidebar \uB0B4\uBD80 \uC694\uC18C \uC81C\uC678:", btn.tagName);
         continue;
       }
-      if (!satRoot || !satRoot.contains(btn)) {
+      if (!satRoot2 || !satRoot2.contains(btn)) {
         console.log("[SAT-DEBUG] SAT root \uC678\uBD80 \uC694\uC18C \uC81C\uC678:", btn.tagName);
         continue;
       }
@@ -7938,10 +7964,10 @@
       const hasNextAria = ariaLabel && (ariaLabel.includes("\uB2E4\uC74C") || ariaLabel.toLowerCase().includes("next") || ariaLabel.toLowerCase().includes("continue") || ariaLabel.toLowerCase().includes("\uACC4\uC18D"));
       const hasTestId = dataTestId && (dataTestId.includes("next") || dataTestId === "next-button" || dataTestId.includes("continue"));
       if (!hasNextText && !hasNextAria && !hasTestId) continue;
-      const progressInParent = satRoot.innerText && satRoot.innerText.match(/\d+\s*\/\s*27/);
-      const choicesInParent = satRoot.querySelector('[role="radio"], [class*="choice"]');
+      const progressInParent = satRoot2.innerText && satRoot2.innerText.match(/\d+\s*\/\s*27/);
+      const choicesInParent = satRoot2.querySelector('[role="radio"], [class*="choice"]');
       const rect = btn.getBoundingClientRect();
-      const satRootRect = satRoot.getBoundingClientRect();
+      const satRootRect = satRoot2.getBoundingClientRect();
       filteredCandidates.push({
         button: btn,
         dataTestId,
@@ -7988,8 +8014,8 @@
       const candidates = [];
       const DEBUG = true;
       console.log(`[SAT] Next \uBC84\uD2BC \uAC80\uC0C9 \uC2DC\uC791 (\uD6C4\uBCF4: ${allButtons.length}\uAC1C)`);
-      const satRoot = findSatRoot();
-      console.log(`[SAT-DEBUG] SAT root \uCEE8\uD14C\uC774\uB108:`, satRoot ? satRoot.tagName + (satRoot.className ? "." + satRoot.className.split(" ")[0] : "") : "null");
+      const satRoot2 = findSatRoot();
+      console.log(`[SAT-DEBUG] SAT root \uCEE8\uD14C\uC774\uB108:`, satRoot2 ? satRoot2.tagName + (satRoot2.className ? "." + satRoot2.className.split(" ")[0] : "") : "null");
       for (const btn of allButtons) {
         if (!isElementVisible(btn)) continue;
         if (btn.disabled || btn.getAttribute("aria-disabled") === "true") continue;
@@ -8040,8 +8066,8 @@
           const isVisible = style.display !== "none" && style.visibility !== "hidden" && parseFloat(style.opacity) > 0 && rect.width > 0 && rect.height > 0;
           const satRootAncestor = btn.closest("[data-sat-root]");
           const mainAncestor = btn.closest('main, [role="main"]');
-          const progressContainer = satRoot && satRoot.contains(btn) ? satRoot : null;
-          const progressText = (satRoot ? satRoot.innerText || satRoot.textContent : "").match(/\d+\s*\/\s*27/);
+          const progressContainer = satRoot2 && satRoot2.contains(btn) ? satRoot2 : null;
+          const progressText = (satRoot2 ? satRoot2.innerText || satRoot2.textContent : "").match(/\d+\s*\/\s*27/);
           const hasProgressInContainer = !!progressText;
           const dataset = {};
           for (const key in btn.dataset) {
@@ -8077,7 +8103,7 @@
             outerHTMLSlice,
             satRootAncestor: satRootAncestor ? "found" : "none",
             mainAncestor: mainAncestor ? "found" : "none",
-            inSatRoot: satRoot && satRoot.contains(btn),
+            inSatRoot: satRoot2 && satRoot2.contains(btn),
             hasProgressInContainer
           };
           candidates.push(candidateInfo);
@@ -8236,13 +8262,18 @@
   // src/dom/extract.js
   var extract_exports = {};
   __export(extract_exports, {
+    SEL_OPTION: () => SEL_OPTION,
     checkIfGraded: () => checkIfGraded,
+    describeDoc: () => describeDoc,
     detectCorrectAnswer: () => detectCorrectAnswer,
     detectCurrentSection: () => detectCurrentSection,
+    ensureChoicesPresent: () => ensureChoicesPresent,
+    ensureChoicesVisible: () => ensureChoicesVisible,
     extractAnswer: () => extractAnswer,
     extractAnswerFromGradedUI: () => extractAnswerFromGradedUI,
     extractByTextPattern: () => extractByTextPattern,
     extractChoices: () => extractChoices,
+    extractChoicesSafe: () => extractChoicesSafe,
     extractCurrentProblem: () => extractCurrentProblem,
     extractExplanation: () => extractExplanation,
     extractExplanationAfterGrading: () => extractExplanationAfterGrading,
@@ -8253,11 +8284,17 @@
     extractText: () => extractText,
     findSatRoot: () => findSatRoot,
     getCurrentProblemNumber: () => getCurrentProblemNumber,
+    getNextButtonStrict: () => getNextButtonStrict,
     getProgressState: () => getProgressState,
     getQuestionSignature: () => getQuestionSignature,
+    getRootForExtract: () => getRootForExtract,
+    getRootFromNextButtonAsync: () => getRootFromNextButtonAsync,
+    getSatRootForChoices: () => getSatRootForChoices,
+    hasAnyChoiceSelected: () => hasAnyChoiceSelected,
     isGraded: () => isGraded,
     isModuleStartScreen: () => isModuleStartScreen,
     isQuestionScreen: () => isQuestionScreen,
+    scrollScanForChoices: () => scrollScanForChoices,
     waitForAnswerUIWithNextButtonCheck: () => waitForAnswerUIWithNextButtonCheck,
     waitForGrading: () => waitForGrading
   });
@@ -8430,7 +8467,7 @@
       return null;
     }
   }
-  function findFigureCandidates(satRoot) {
+  function findFigureCandidates(satRoot2) {
     const candidates = [];
     const MIN_SIZE = 60;
     const figureSelectors = [
@@ -8447,7 +8484,7 @@
       '[class*="media"]'
     ];
     for (const selector of figureSelectors) {
-      const elements = deepQuerySelectorAll(selector, satRoot);
+      const elements = deepQuerySelectorAll(selector, satRoot2);
       for (const el of elements) {
         if (!isElementVisible(el)) continue;
         const rect = el.getBoundingClientRect();
@@ -8460,7 +8497,7 @@
     }
     const imageSelectors = ["img", "svg", "canvas"];
     for (const selector of imageSelectors) {
-      const elements = deepQuerySelectorAll(selector, satRoot);
+      const elements = deepQuerySelectorAll(selector, satRoot2);
       for (const el of elements) {
         if (!isElementVisible(el)) continue;
         const rect = el.getBoundingClientRect();
@@ -8521,17 +8558,17 @@
     }
     return null;
   }
-  async function extractFigures(satRoot) {
+  async function extractFigures(satRoot2) {
     const figures = [];
     let html2canvasCount = 0;
     console.log(`[DEBUG STEP 2] extractFigures \uC9C4\uC785`);
-    fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:entry", message: "DEBUG STEP 2: extractFigures \uC9C4\uC785", data: { satRootFound: !!satRoot }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "B" }) }).catch(() => {
+    fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:entry", message: "DEBUG STEP 2: extractFigures \uC9C4\uC785", data: { satRootFound: !!satRoot2 }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "B" }) }).catch(() => {
     });
     try {
-      const imgCount = satRoot.querySelectorAll("img").length;
-      const canvasCount = satRoot.querySelectorAll("canvas").length;
-      const svgCount = satRoot.querySelectorAll("svg").length;
-      const bgImageElements = Array.from(satRoot.querySelectorAll("*")).filter((el) => {
+      const imgCount = satRoot2.querySelectorAll("img").length;
+      const canvasCount = satRoot2.querySelectorAll("canvas").length;
+      const svgCount = satRoot2.querySelectorAll("svg").length;
+      const bgImageElements = Array.from(satRoot2.querySelectorAll("*")).filter((el) => {
         try {
           const style = window.getComputedStyle(el);
           return style.backgroundImage && style.backgroundImage !== "none";
@@ -8542,7 +8579,7 @@
       console.log(`[DEBUG STEP 2] \uAE30\uBCF8 \uC140\uB809\uD130 \uACB0\uACFC: img=${imgCount}, canvas=${canvasCount}, svg=${svgCount}, background-image=${bgImageElements}`);
       fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:beforeFindCandidates", message: "DEBUG STEP 2: \uD6C4\uBCF4 \uD0D0\uC0C9 \uC804 \uAE30\uBCF8 \uC140\uB809\uD130 \uAC80\uC99D", data: { imgCount, canvasCount, svgCount, bgImageElements }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "B" }) }).catch(() => {
       });
-      const candidates = findFigureCandidates(satRoot);
+      const candidates = findFigureCandidates(satRoot2);
       fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractFigures:afterFindCandidates", message: "math image extract: candidates count", data: { imgCount, canvasCount, svgCount, candidatesCount: candidates.length }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {
       });
       console.log(`[DEBUG STEP 2] findFigureCandidates \uACB0\uACFC: ${candidates.length}\uAC1C \uD6C4\uBCF4`);
@@ -8594,6 +8631,18 @@
       });
     }
     return figures;
+  }
+  function hasAnyChoiceSelected() {
+    const satRoot2 = findSatRoot();
+    if (!satRoot2) return false;
+    const candidates = satRoot2.querySelectorAll(
+      '[role="radio"][aria-checked="true"], [role="option"][aria-selected="true"]'
+    );
+    for (const el of candidates) {
+      if (el.closest('figure, [class*="figure"], [class*="image"], [data-testid*="figure"], [data-testid*="image"]')) continue;
+      return true;
+    }
+    return false;
   }
   function isModuleStartScreen() {
     const searchRoot = document.body;
@@ -8689,330 +8738,323 @@
     console.warn(`[SAT PDF Exporter] \uC139\uC158 \uAC10\uC9C0 \uC2E4\uD328 (reading: ${readingScore}, math: ${mathScore}). unknown\uC73C\uB85C \uCC98\uB9AC`);
     return "unknown";
   }
-  function extractChoices(container) {
-    if (window !== window.top && !window.__SAT_IS_WORKER) {
-      console.warn("[SAT-DEBUG] [extractChoices] Worker frame\uC774 \uC544\uB2CC iframe\uC5D0\uC11C \uC2E4\uD589 \uC2DC\uB3C4 - \uC2A4\uD0B5");
-      return [];
+  function getScrollableParent(el) {
+    let p = el && el.parentElement;
+    while (p) {
+      try {
+        const style = window.getComputedStyle(p);
+        if (/(auto|scroll|overlay)/.test(style.overflowY || "") && p.scrollHeight > p.clientHeight) return p;
+      } catch (_) {
+      }
+      p = p.parentElement;
     }
-    const choices = [];
-    const candidates = [];
-    const radioElements = deepQuerySelectorAll('[role="radio"]', container);
-    console.log(`[SAT-DEBUG] [extractChoices] Priority 1 (role="radio"): ${radioElements.length}\uAC1C \uBC1C\uACAC`);
-    for (const el of radioElements) {
-      if (!isElementVisible(el) || el.disabled) continue;
-      const text = (el.innerText || el.textContent || "").trim();
-      const ariaLabel = (el.getAttribute("aria-label") || "").trim();
-      const ariaChecked = el.getAttribute("aria-checked");
-      let choiceLetter = null;
-      if (ariaLabel) {
-        const match = ariaLabel.match(/choice\s*([A-D])/i) || ariaLabel.match(/^([A-D])[\.\)]?/i);
-        if (match) choiceLetter = match[1].toUpperCase();
+    return null;
+  }
+  function describeDoc(doc) {
+    if (!doc) return { href: void 0, title: void 0, ready: void 0, hasNext: false, hasActivitySet: false, hasScroll: false, hasChoices: false };
+    return {
+      href: doc.location?.href,
+      title: doc.title,
+      ready: doc.readyState,
+      hasNext: !!doc.querySelector?.('[data-test-id="next-button"]'),
+      hasActivitySet: !!doc.querySelector?.("activity-set"),
+      hasScroll: !!doc.querySelector?.(".scroll-container"),
+      hasChoices: !!doc.querySelector?.("mat-action-list.choices-container")
+    };
+  }
+  async function getNextButtonStrict(timeoutMs = 5e3) {
+    const t0 = Date.now();
+    const isTop = typeof window !== "undefined" && window.top === window;
+    console.log("[NEXT-CTX]", { isTop, href: location.href, ready: document.readyState });
+    while (Date.now() - t0 < timeoutMs) {
+      const next = document.querySelector('[data-test-id="next-button"]');
+      if (next) {
+        console.log("[NEXT-FOUND]", { dt: Date.now() - t0, doc: describeDoc(document), html: next.outerHTML.slice(0, 140) });
+        return next;
       }
-      if (!choiceLetter) {
-        const textMatch = text.match(/^([A-D])[\.\)]?\s*/);
-        if (textMatch) choiceLetter = textMatch[1].toUpperCase();
-      }
-      if (!choiceLetter) {
-        const testId = el.getAttribute("data-testid") || "";
-        const testIdMatch = testId.match(/choice[_-]?([A-D])/i) || testId.match(/option[_-]?([A-D])/i);
-        if (testIdMatch) choiceLetter = testIdMatch[1].toUpperCase();
-      }
-      if (!choiceLetter) {
-        const existingLetters = candidates.map((c) => c.label).filter((l) => l >= "A" && l <= "D");
-        const availableLetters = ["A", "B", "C", "D"].filter((l) => !existingLetters.includes(l));
-        if (availableLetters.length > 0) {
-          choiceLetter = availableLetters[0];
-        }
-      }
-      if (choiceLetter && choiceLetter >= "A" && choiceLetter <= "D") {
-        const choiceText = text.replace(/^[A-D][\.\)]\s*/, "").trim() || ariaLabel || "\uC120\uD0DD\uC9C0";
-        if (!candidates.find((c) => c.label === choiceLetter && c.element === el)) {
-          candidates.push({
-            label: choiceLetter,
-            text: choiceText,
-            element: el,
-            priority: 1,
-            source: 'role="radio"'
-          });
-        }
-      }
+      await new Promise((r) => setTimeout(r, 100));
     }
-    if (candidates.length < 4) {
-      const radioInputs = deepQuerySelectorAll('input[type="radio"]', container);
-      console.log(`[SAT-DEBUG] [extractChoices] Priority 2 (input[type="radio"]): ${radioInputs.length}\uAC1C \uBC1C\uACAC`);
-      for (const input of radioInputs) {
-        if (!isElementVisible(input) || input.disabled) continue;
-        let labelEl = null;
-        const inputId = input.getAttribute("id");
-        if (inputId) {
-          labelEl = container.querySelector(`label[for="${inputId}"]`);
-        }
-        if (!labelEl && input.parentElement && input.parentElement.tagName === "LABEL") {
-          labelEl = input.parentElement;
-        }
-        const labelText = labelEl ? (labelEl.innerText || labelEl.textContent || "").trim() : "";
-        const inputAriaLabel = input.getAttribute("aria-label") || "";
-        const text = labelText || inputAriaLabel;
-        let choiceLetter = null;
-        const match = text.match(/^([A-D])[\.\)]?\s*/) || inputAriaLabel.match(/choice\s*([A-D])/i);
-        if (match) {
-          choiceLetter = match[1].toUpperCase();
-        } else {
-          const existingLetters = candidates.map((c) => c.label).filter((l) => l >= "A" && l <= "D");
-          const availableLetters = ["A", "B", "C", "D"].filter((l) => !existingLetters.includes(l));
-          if (availableLetters.length > 0) {
-            choiceLetter = availableLetters[0];
-          }
-        }
-        if (choiceLetter && choiceLetter >= "A" && choiceLetter <= "D") {
-          const choiceText = text.replace(/^[A-D][\.\)]\s*/, "").trim() || "\uC120\uD0DD\uC9C0";
-          const targetElement = labelEl || input;
-          if (!candidates.find((c) => c.element === targetElement)) {
-            candidates.push({
-              label: choiceLetter,
-              text: choiceText,
-              element: targetElement,
-              priority: 2,
-              source: 'input[type="radio"] + label'
-            });
-          }
-        }
-      }
+    console.log("[NEXT-NOTFOUND]", { dt: Date.now() - t0, doc: describeDoc(document) });
+    const err = Object.assign(new Error("NEXT_NOT_FOUND"), { code: "NEXT_NOT_FOUND", doc: describeDoc(document) });
+    throw err;
+  }
+  async function getRootFromNextButtonAsync(timeoutMs = 5e3) {
+    const next = await getNextButtonStrict(timeoutMs);
+    const root = next.closest("activity-set") || next.closest("main") || next.ownerDocument && next.ownerDocument.body || document.body;
+    return { root, next };
+  }
+  async function getRootForExtract(timeoutMs = 2e3) {
+    try {
+      const next = await getNextButtonStrict(timeoutMs);
+      return next.closest("activity-set") || next.closest("main") || next.ownerDocument && next.ownerDocument.body || document.body;
+    } catch (_) {
+      return findSatRoot();
     }
-    if (candidates.length < 4) {
-      const ariaCheckedElements = deepQuerySelectorAll("[aria-checked], [aria-selected]", container);
-      console.log(`[SAT-DEBUG] [extractChoices] Priority 3 (aria-checked/selected): ${ariaCheckedElements.length}\uAC1C \uBC1C\uACAC`);
-      for (const el of ariaCheckedElements) {
-        if (!isElementVisible(el) || el.disabled) continue;
-        if (candidates.find((c) => c.element === el)) continue;
-        const text = (el.innerText || el.textContent || "").trim();
-        const ariaLabel = (el.getAttribute("aria-label") || "").trim();
-        let choiceLetter = null;
-        const match = text.match(/^([A-D])[\.\)]?\s*/) || ariaLabel.match(/choice\s*([A-D])/i) || ariaLabel.match(/^([A-D])[\.\)]?/i);
-        if (match) {
-          choiceLetter = match[1].toUpperCase();
-        } else {
-          const existingLetters = candidates.map((c) => c.label).filter((l) => l >= "A" && l <= "D");
-          const availableLetters = ["A", "B", "C", "D"].filter((l) => !existingLetters.includes(l));
-          if (availableLetters.length > 0) {
-            choiceLetter = availableLetters[0];
-          }
-        }
-        if (choiceLetter && choiceLetter >= "A" && choiceLetter <= "D") {
-          const choiceText = text.replace(/^[A-D][\.\)]\s*/, "").trim() || ariaLabel || "\uC120\uD0DD\uC9C0";
-          if (!candidates.find((c) => c.label === choiceLetter && c.element === el)) {
-            candidates.push({
-              label: choiceLetter,
-              text: choiceText,
-              element: el,
-              priority: 3,
-              source: "aria-checked/selected"
-            });
-          }
-        }
-      }
+  }
+  function getSatRootForChoices() {
+    return document.querySelector("activity-set") || document.body;
+  }
+  function getPreferredScrollContainer(container) {
+    const el = container && container.querySelector && container.querySelector(".scroll-container") || document.querySelector("activity-set .scroll-container") || document.querySelector(".scroll-container");
+    return el || null;
+  }
+  function findScrollContainerCandidates(satRoot2) {
+    if (!satRoot2 || !satRoot2.querySelectorAll) return [];
+    const preferred = getPreferredScrollContainer(satRoot2);
+    if (preferred) {
+      console.log("[CHOICE-VIS] scroll-container \uC0AC\uC6A9 (.scroll-container)");
     }
-    if (candidates.length < 4) {
-      const optionElements = deepQuerySelectorAll('[role="option"]', container);
-      console.log(`[SAT-DEBUG] [extractChoices] Priority 4 (role="option"): ${optionElements.length}\uAC1C \uBC1C\uACAC`);
-      for (const el of optionElements) {
-        if (!isElementVisible(el) || el.disabled) continue;
-        if (candidates.find((c) => c.element === el)) continue;
-        const text = (el.innerText || el.textContent || "").trim();
-        const ariaLabel = (el.getAttribute("aria-label") || "").trim();
-        let choiceLetter = null;
-        const match = text.match(/^([A-D])[\.\)]?\s*/) || ariaLabel.match(/choice\s*([A-D])/i);
-        if (match) {
-          choiceLetter = match[1].toUpperCase();
-        } else {
-          const existingLetters = candidates.map((c) => c.label).filter((l) => l >= "A" && l <= "D");
-          const availableLetters = ["A", "B", "C", "D"].filter((l) => !existingLetters.includes(l));
-          if (availableLetters.length > 0) {
-            choiceLetter = availableLetters[0];
-          }
-        }
-        if (choiceLetter && choiceLetter >= "A" && choiceLetter <= "D") {
-          const choiceText = text.replace(/^[A-D][\.\)]\s*/, "").trim() || ariaLabel || "\uC120\uD0DD\uC9C0";
-          if (!candidates.find((c) => c.label === choiceLetter && c.element === el)) {
-            candidates.push({
-              label: choiceLetter,
-              text: choiceText,
-              element: el,
-              priority: 4,
-              source: 'role="option"'
-            });
-          }
-        }
-      }
-    }
-    candidates.sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority - b.priority;
-      return a.label.localeCompare(b.label);
-    });
-    const seenLabels = /* @__PURE__ */ new Set();
-    for (const candidate of candidates) {
-      if (candidate.label >= "A" && candidate.label <= "D" && !seenLabels.has(candidate.label)) {
-        choices.push({
-          label: candidate.label,
-          text: candidate.text
-        });
-        seenLabels.add(candidate.label);
-      }
-    }
-    console.log(`[SAT-DEBUG] [extractChoices] \uCD1D \uD6C4\uBCF4: ${candidates.length}\uAC1C, \uCD94\uCD9C\uB41C \uC120\uD0DD\uC9C0: ${choices.length}\uAC1C`);
-    if (candidates.length > 0) {
-      const first5 = candidates.slice(0, 5).map((c) => ({
-        label: c.label,
-        text: c.text.substring(0, 30) + (c.text.length > 30 ? "..." : ""),
-        source: c.source
-      }));
-      console.log(`[SAT-DEBUG] [extractChoices] \uCCAB 5\uAC1C \uD6C4\uBCF4:`, first5);
-    }
-    if (candidates.length < 4) {
-      console.log(`[SAT-DEBUG] [extractChoices] Priority 5 (\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31): \uD074\uB9AD \uAC00\uB2A5\uD55C \uC694\uC18C \uD0D0\uC0C9`);
-      const clickableSelectors = ["button", '[role="button"]', "[tabindex]", "[data-testid]", "div[onclick]", "span[onclick]", '[class*="choice"]', '[class*="option"]', ".mat-mdc-radio-button", ".mat-radio-button", ".mat-mdc-list-option"];
-      const allClickableSet = /* @__PURE__ */ new Set();
-      for (const sel of clickableSelectors) {
+    const scrollables = [];
+    try {
+      const candidates = satRoot2.querySelectorAll("*");
+      for (const el of candidates) {
+        if (el === preferred) continue;
         try {
-          const nodes = deepQuerySelectorAll(sel, container);
-          nodes.forEach((el) => allClickableSet.add(el));
-        } catch (e) {
-        }
-      }
-      const allClickable = Array.from(allClickableSet);
-      console.log(`[SAT-DEBUG] [extractChoices] \uC804\uCCB4 \uD074\uB9AD \uAC00\uB2A5 \uC694\uC18C: ${allClickable.length}\uAC1C`);
-      const visibleClickable = allClickable.filter((el) => {
-        try {
-          const r = el.getBoundingClientRect();
-          if (r.width < 20 || r.height < 20) return false;
-          if (r.bottom < 0 || r.top > window.innerHeight) return false;
           const style = window.getComputedStyle(el);
-          if (style.visibility === "hidden" || style.display === "none" || style.opacity === "0") return false;
-          return true;
-        } catch (e) {
-          return false;
+          const overflowOk = /(auto|scroll|overlay)/.test(style.overflowY || "") || el.classList && el.classList.contains("scroll-container");
+          if (!overflowOk) continue;
+          const scrollableHeight = el.scrollHeight - el.clientHeight;
+          if (scrollableHeight < 50) continue;
+          const rect = el.getBoundingClientRect();
+          const centerY = rect.top + rect.height / 2;
+          const viewportCenter = typeof window !== "undefined" ? window.innerHeight / 2 : 400;
+          const distanceFromCenter = Math.abs(centerY - viewportCenter);
+          const visibilityScore = Math.max(0, rect.height - Math.max(0, -rect.top) - Math.max(0, rect.bottom - (window.innerHeight || 800)));
+          scrollables.push({
+            el,
+            scrollableHeight,
+            distanceFromCenter,
+            visibilityScore: visibilityScore + (rect.height > 0 ? 1 : 0)
+          });
+        } catch (_) {
         }
-      });
-      console.log(`[SAT-DEBUG] [extractChoices] \uD654\uBA74\uC5D0 \uBCF4\uC774\uB294 \uD074\uB9AD \uAC00\uB2A5 \uC694\uC18C: ${visibleClickable.length}\uAC1C`);
-      for (const el of visibleClickable) {
-        if (el.disabled) continue;
-        if (candidates.find((c) => c.element === el)) continue;
-        const text = (el.innerText || el.textContent || "").trim();
-        const ariaLabel = (el.getAttribute("aria-label") || "").trim();
-        const combinedText = (text + " " + ariaLabel).trim();
-        let choiceLetter = null;
-        const patterns = [
-          /^(A|B|C|D)\b/i,
-          /\b(A|B|C|D)\b/i,
-          /^(A|B|C|D)[\.\)]\s*/i,
-          /choice\s*(A|B|C|D)/i,
-          /option\s*(A|B|C|D)/i,
-          /선택지\s*(A|B|C|D)/i
-        ];
-        for (const pattern of patterns) {
-          const match = combinedText.match(pattern);
-          if (match) {
-            choiceLetter = match[1].toUpperCase();
+      }
+    } catch (_) {
+    }
+    scrollables.sort((a, b) => {
+      if (a.distanceFromCenter !== b.distanceFromCenter) return a.distanceFromCenter - b.distanceFromCenter;
+      if (b.visibilityScore !== a.visibilityScore) return b.visibilityScore - a.visibilityScore;
+      return b.scrollableHeight - a.scrollableHeight;
+    });
+    const list = scrollables.map((s) => s.el);
+    if (preferred) return [preferred, ...list];
+    return list;
+  }
+  async function scrollScanForChoices(container, maxSteps = 12) {
+    const candidates = findScrollContainerCandidates(container);
+    const count = () => {
+      try {
+        return extractChoices(container).length;
+      } catch (_) {
+        return 0;
+      }
+    };
+    if (candidates.length === 0) {
+      console.warn("[CHOICE-VIS] scrollScanForChoices: \uC2A4\uD06C\uB864 \uCEE8\uD14C\uC774\uB108 \uC5C6\uC74C");
+      return count() >= 4;
+    }
+    for (const sc of candidates) {
+      let stepsWithoutMove = 0;
+      for (let i = 0; i < maxSteps; i++) {
+        const choicesCount = count();
+        if (choicesCount >= 4) {
+          console.log(`[CHOICE-VIS] scrollScanForChoices: \uC2A4\uD06C\uB864 \uC131\uACF5, choices ${choicesCount}\uAC1C`);
+          return true;
+        }
+        const before = sc.scrollTop;
+        const delta = Math.floor(sc.clientHeight * 0.8);
+        sc.scrollTop = Math.min(before + delta, sc.scrollHeight);
+        sc.dispatchEvent(new Event("scroll"));
+        await new Promise((r) => setTimeout(r, 200));
+        const after = sc.scrollTop;
+        if (after === before) {
+          stepsWithoutMove++;
+          if (stepsWithoutMove >= 2) {
+            console.log("[CHOICE-VIS] scrollScanForChoices: scrollTop \uBCC0\uD654 \uC5C6\uC74C \u2192 \uB2E4\uC74C \uCEE8\uD14C\uC774\uB108 \uC2DC\uB3C4");
             break;
           }
-        }
-        if (choiceLetter && choiceLetter >= "A" && choiceLetter <= "D") {
-          const existingLetters = candidates.map((c) => c.label).filter((l) => l >= "A" && l <= "D");
-          if (!existingLetters.includes(choiceLetter)) {
-            const choiceText = text.replace(/^(A|B|C|D)[\.\)]\s*/i, "").trim() || ariaLabel || "\uC120\uD0DD\uC9C0";
-            candidates.push({
-              label: choiceLetter,
-              text: choiceText,
-              element: el,
-              priority: 5,
-              source: "\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31"
-            });
-            console.log(`[SAT-DEBUG] [extractChoices] \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD6C4\uBCF4 \uBC1C\uACAC: ${choiceLetter} - ${choiceText.substring(0, 30)}`);
-          }
-        }
-      }
-      candidates.sort((a, b) => {
-        if (a.priority !== b.priority) return a.priority - b.priority;
-        return a.label.localeCompare(b.label);
-      });
-      choices.length = 0;
-      const seenLabels2 = /* @__PURE__ */ new Set();
-      for (const candidate of candidates) {
-        if (candidate.label >= "A" && candidate.label <= "D" && !seenLabels2.has(candidate.label)) {
-          choices.push({
-            label: candidate.label,
-            text: candidate.text,
-            element: candidate.element,
-            // ★ element 포함 (클릭에 필요)
-            source: candidate.source || "unknown",
-            priority: candidate.priority || 5
-          });
-          seenLabels2.add(candidate.label);
+        } else {
+          stepsWithoutMove = 0;
         }
       }
     }
-    if (choices.length === 0) {
-      console.warn("[SAT PDF Exporter] \uBAA8\uB4E0 \uBC29\uBC95\uC73C\uB85C \uC120\uD0DD\uC9C0\uB97C \uCC3E\uC9C0 \uBABB\uD568 - \uC21C\uC218 \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31 \uC2DC\uB3C4");
-      const tagSelectors = ["div", "span", "p", "li", "button", "label", "td", '[role="button"]'];
-      const allElementsSet = /* @__PURE__ */ new Set();
-      for (const sel of tagSelectors) {
-        try {
-          const nodes = deepQuerySelectorAll(sel, container);
-          nodes.forEach((el) => allElementsSet.add(el));
-        } catch (e) {
-        }
+    const final = count();
+    console.log(`[CHOICE-VIS] scrollScanForChoices: ${maxSteps}\uB2E8\uACC4 \uD6C4 choices ${final}\uAC1C`);
+    return final >= 4;
+  }
+  async function ensureChoicesVisible(opts) {
+    const { root: optsRoot } = opts || {};
+    const root = optsRoot && optsRoot.querySelector ? optsRoot : getSatRootForChoices();
+    const getCount = () => {
+      try {
+        return root.querySelectorAll("mat-action-list.choices-container button").length;
+      } catch (_) {
+        return 0;
       }
-      const allElements = Array.from(allElementsSet).filter((el) => {
-        try {
-          const r = el.getBoundingClientRect();
-          return r.width >= 20 && r.height >= 20 && r.bottom >= 0 && r.top <= window.innerHeight;
-        } catch {
-          return false;
-        }
-      });
-      allElements.sort((a, b) => a.getBoundingClientRect().width * a.getBoundingClientRect().height - b.getBoundingClientRect().width * b.getBoundingClientRect().height);
-      const seenLabels2 = /* @__PURE__ */ new Set();
-      const choicePatterns = [
-        /^\s*([A-D])[\.\)]\s*([\s\S]+)$/,
-        // "A. text" or "A) text" (leading space ok)
-        /^\s*\(([A-D])\)\s*([\s\S]+)$/,
-        // "(A) text"
-        /^([A-D])\s*[\.\)]\s*([\s\S]+)$/
-        // "A ." or "A )"
-      ];
-      const lineChoiceRe = /^\s*([A-D])[\.\)]\s*(.*)$/;
-      for (const el of allElements) {
-        const rawText = (el.innerText || el.textContent || "").trim();
-        if (!rawText || rawText.length > 600) continue;
-        let m = null;
-        for (const pattern of choicePatterns) {
-          m = rawText.match(pattern);
-          if (m) break;
-        }
-        if (!m && rawText.includes("\n")) {
-          const firstLine = rawText.split("\n")[0];
-          const lineMatch = firstLine.match(lineChoiceRe);
-          if (lineMatch) m = [rawText, lineMatch[1], rawText.slice(firstLine.length).trim() || lineMatch[2]];
-        }
-        if (!m || m[1] < "A" || m[1] > "D" || seenLabels2.has(m[1])) continue;
-        const rest = (m[2] || "").trim();
-        if (/[B-D][\.\)]/.test(rest)) continue;
-        seenLabels2.add(m[1]);
-        choices.push({
-          label: m[1],
-          text: rest.substring(0, 100),
-          element: el,
-          priority: 5,
-          source: "\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31"
+    };
+    if (getCount() >= 4) return;
+    const wait = () => new Promise((r) => setTimeout(r, CHOICE_VIS_WAIT_MS));
+    const hasChoicesContainer = () => !!root.querySelector("mat-action-list.choices-container");
+    const choicesContainer = () => root.querySelector("mat-action-list.choices-container");
+    const firstOption = () => root.querySelector("mat-action-list.choices-container button") || root.querySelector(".choices-container button");
+    const nextBtn = () => root.querySelector('button[data-test-id="next-button"]');
+    const getChoiceNodes = () => root.querySelectorAll("mat-action-list.choices-container button");
+    for (let iter = 0; iter < CHOICE_VIS_MAX_ITER; iter++) {
+      const count = getCount();
+      console.log("[CHOICE-VIS]", { iter, step: 1, count, hasChoicesContainer: hasChoicesContainer() });
+      if (count >= 4) return;
+      const choices = getChoiceNodes();
+      const target = choices[0] || choicesContainer() || firstOption() || nextBtn() || root;
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+      await wait();
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      if (getCount() >= 4) return;
+    }
+    const focusTarget = document.querySelector("activity-set") || document.body;
+    try {
+      if (typeof focusTarget.focus === "function") {
+        if (!focusTarget.hasAttribute("tabindex")) focusTarget.setAttribute("tabindex", "-1");
+        focusTarget.focus();
+      }
+    } catch (_) {
+    }
+    const keys = [
+      { key: "PageDown", code: "PageDown" },
+      { key: " ", code: "Space" },
+      { key: "ArrowDown", code: "ArrowDown" }
+    ];
+    for (let iter = 0; iter < CHOICE_VIS_MAX_ITER; iter++) {
+      const count = getCount();
+      console.log("[CHOICE-VIS]", { iter, step: 2, count, hasChoicesContainer: hasChoicesContainer() });
+      if (count >= 4) return;
+      for (const { key, code } of keys) {
+        focusTarget.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true }));
+        focusTarget.dispatchEvent(new KeyboardEvent("keyup", { key, code, bubbles: true, cancelable: true }));
+        await wait();
+        if (getCount() >= 4) return;
+      }
+    }
+    for (let iter = 0; iter < CHOICE_VIS_MAX_ITER; iter++) {
+      const count = getCount();
+      console.log("[CHOICE-VIS]", { iter, step: 3, count, hasChoicesContainer: hasChoicesContainer() });
+      if (count >= 4) return;
+      window.dispatchEvent(new WheelEvent("wheel", { deltaY: 800, bubbles: true, cancelable: true }));
+      if (document.scrollingElement) {
+        document.scrollingElement.scrollBy(0, 800);
+      }
+      await wait();
+    }
+    const err = new Error("CHOICES_NOT_FOUND");
+    err.code = "CHOICES_NOT_FOUND";
+    throw err;
+  }
+  async function ensureChoicesPresent(container) {
+    const optionSel = '.mat-mdc-radio-button, .mat-radio-button, mat-list-option, [role="radio"], [role="option"], input[type="radio"], .mat-mdc-list-item, .option';
+    let rawCount = 0;
+    try {
+      rawCount = deepQuerySelectorAll(optionSel, container).length;
+    } catch (_) {
+    }
+    console.log("[CHOICE-EXTRACT] raw option candidates before scroll:", rawCount);
+    const parent = getScrollableParent(container) || findSatRoot() || container;
+    let count = rawCount;
+    for (let i = 0; i < 7 && count < 2; i++) {
+      if (parent && parent.scrollHeight > parent.clientHeight) {
+        parent.scrollTop += parent.clientHeight * 0.8;
+        await new Promise((r) => {
+          requestAnimationFrame(() => requestAnimationFrame(r));
         });
-        console.log(`[SAT-DEBUG] [extractChoices] \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD6C4\uBCF4 \uBC1C\uACAC: ${m[1]} - ${rest.substring(0, 30)}`);
-        if (choices.length >= 4) break;
-      }
-      if (choices.length >= 2) {
-        console.log(`[SAT-DEBUG] [extractChoices] \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uCD94\uCD9C \uC131\uACF5: ${choices.length}\uAC1C (element \uD3EC\uD568)`);
+        await new Promise((r) => setTimeout(r, 80));
+        try {
+          count = deepQuerySelectorAll(optionSel, container).length;
+        } catch (_) {
+        }
+        console.log("[CHOICE-EXTRACT] scroll attempt", i + 1, "raw count:", count, "parent:", { scrollTop: parent.scrollTop, scrollHeight: parent.scrollHeight, clientHeight: parent.clientHeight });
+        if (count >= 2) break;
       }
     }
-    return choices;
+    return count;
+  }
+  function extractChoices(container) {
+    const root = container;
+    if (!root || !root.querySelectorAll) {
+      const err = new Error("extractChoices requires root (no document.body)");
+      err.code = "NO_ROOT";
+      throw err;
+    }
+    console.log("[EXTRACT-CTX]", {
+      href: typeof location !== "undefined" ? location.href : "",
+      isTop: typeof window !== "undefined" && window.top === window,
+      hasActivitySet: typeof document !== "undefined" && !!document.querySelector("activity-set"),
+      rootTag: root?.tagName,
+      rootHasChoices: !!root?.querySelector?.("mat-action-list.choices-container"),
+      rootDirect: root?.querySelectorAll?.("mat-action-list.choices-container button")?.length ?? 0,
+      rootOption: root?.querySelectorAll?.("mat-action-list.choices-container button.mat-mdc-list-item.option")?.length ?? 0
+    });
+    const buttons = root.querySelectorAll(BTN_SEL);
+    if (buttons.length >= 4) {
+      console.log("[CHOICES-DIRECT]", buttons.length, buttons[0]?.outerHTML?.slice(0, 120));
+      const list2 = Array.from(buttons).slice(0, 8).sort((a, b) => {
+        try {
+          return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+        } catch (_) {
+          return 0;
+        }
+      });
+      const result2 = [];
+      for (let i = 0; i < 4; i++) {
+        const el = list2[i];
+        const L = ["A", "B", "C", "D"][i];
+        const raw = (el.innerText || el.textContent || "").trim();
+        const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, "").trim() || raw;
+        result2.push({ label: L, text, element: el, priority: -2, source: "sat-ui" });
+      }
+      return result2;
+    }
+    let nodes = [];
+    try {
+      nodes = root.querySelectorAll(SEL_OPTION);
+    } catch (_) {
+    }
+    if (nodes.length < 4) {
+      const err = new Error("CHOICES_NOT_FOUND");
+      err.code = "CHOICES_NOT_FOUND";
+      throw err;
+    }
+    const list = Array.from(nodes).slice(0, 8).sort((a, b) => {
+      try {
+        return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+      } catch (_) {
+        return 0;
+      }
+    });
+    const seen = /* @__PURE__ */ new Set();
+    const result = [];
+    for (let i = 0; i < list.length && result.length < 4; i++) {
+      const el = list[i];
+      const prefixEl = el && el.querySelector ? el.querySelector(".option-prefix") : null;
+      const letter = prefixEl ? (prefixEl.textContent || "").trim().replace(/[\.\)]/g, "").trim().slice(0, 1).toUpperCase() : ["A", "B", "C", "D"][result.length];
+      const L = letter >= "A" && letter <= "D" ? letter : ["A", "B", "C", "D"][result.length];
+      if (seen.has(L)) continue;
+      seen.add(L);
+      const raw = (el.innerText || el.textContent || "").trim();
+      const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, "").trim() || raw;
+      result.push({ label: L, text, element: el, priority: -2, source: "sat-ui" });
+    }
+    if (result.length < 4) {
+      const err = new Error("CHOICES_NOT_FOUND");
+      err.code = "CHOICES_NOT_FOUND";
+      throw err;
+    }
+    return result;
+  }
+  function extractChoicesSafe(container) {
+    if (!container || !container.querySelectorAll) return [];
+    try {
+      return extractChoices(container);
+    } catch (_) {
+      return [];
+    }
   }
   async function extractCurrentProblem(sectionType) {
     if (window !== window.top && !window.__SAT_IS_WORKER) {
@@ -9131,7 +9173,8 @@
         }
       }
     }
-    const choicesArray = extractChoices(document.body);
+    const rootForExtract = await getRootForExtract();
+    const choicesArray = rootForExtract ? extractChoicesSafe(rootForExtract) : [];
     const choices = {};
     for (const choice of choicesArray) {
       if (choice.label >= "A" && choice.label <= "D") {
@@ -9151,15 +9194,15 @@
     });
     let figures = [];
     try {
-      const satRoot = findSatRoot();
-      const satRootTag = satRoot ? satRoot.tagName : null;
-      const satRootIsBody = satRoot === document.body;
-      const imgInRoot = satRoot ? satRoot.querySelectorAll("img").length : 0;
-      fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:satRootCheck", message: "math image extract: satRoot before extractFigures", data: { sectionType, problemNum, satRootFound: !!satRoot, satRootTag, satRootIsBody, imgInRoot }, timestamp: Date.now(), hypothesisId: "H2" }) }).catch(() => {
+      const satRoot2 = findSatRoot();
+      const satRootTag = satRoot2 ? satRoot2.tagName : null;
+      const satRootIsBody = satRoot2 === document.body;
+      const imgInRoot = satRoot2 ? satRoot2.querySelectorAll("img").length : 0;
+      fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:satRootCheck", message: "math image extract: satRoot before extractFigures", data: { sectionType, problemNum, satRootFound: !!satRoot2, satRootTag, satRootIsBody, imgInRoot }, timestamp: Date.now(), hypothesisId: "H2" }) }).catch(() => {
       });
-      if (satRoot) {
+      if (satRoot2) {
         console.log(`[DEBUG STEP 1] extractFigures \uD638\uCD9C \uC2DC\uC791: \uBB38\uC81C ${problemNum}`);
-        figures = await extractFigures(satRoot);
+        figures = await extractFigures(satRoot2);
         console.log(`[DEBUG STEP 1] extractFigures \uC644\uB8CC: \uBB38\uC81C ${problemNum}, figures.length=${figures.length}`);
         fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractCurrentProblem:extractFiguresResult", message: "math image extract: after extractFigures", data: { sectionType, problemNum, figuresLength: figures.length }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {
         });
@@ -9201,111 +9244,42 @@
     if (window !== window.top && !window.__SAT_IS_WORKER) {
       console.warn("[SAT-DEBUG] [getProgressState] Worker frame\uC774 \uC544\uB2CC iframe\uC5D0\uC11C \uC2E4\uD589 - \uACBD\uACE0\uB9CC \uCD9C\uB825");
     }
-    const satRoot = findSatRoot();
-    if (!satRoot) {
-      console.warn("[DIAG] satRoot not found, progress \uD310\uB3C5 \uC2E4\uD328");
-      return null;
+    const satRoot2 = findSatRoot();
+    const prog = (satRoot2 ? readProgressNumber(satRoot2) : null) || readProgressNumber(document);
+    if (prog) {
+      console.log(`[SAT PDF Exporter] Progress \uBC1C\uACAC (progress element): ${prog.raw}`);
+      return prog.raw;
     }
-    const satRootText = satRoot.innerText || satRoot.textContent || "";
-    const progressRegex = /(\d+)\s*\/\s*(\d+)/g;
-    const matches = satRootText.match(progressRegex);
-    if (matches && matches.length > 0) {
-      const matchCounts = {};
-      matches.forEach((match) => {
-        matchCounts[match] = (matchCounts[match] || 0) + 1;
-      });
-      const mostCommon = Object.keys(matchCounts).reduce(
-        (a, b) => matchCounts[a] > matchCounts[b] ? a : b
-      );
-      const parts = mostCommon.split("/").map((s) => s.trim());
-      const current = parseInt(parts[0]);
-      const total = parseInt(parts[1]);
-      if (current > 0 && current <= total && (total === 27 || total === 22)) {
-        console.log(`[SAT PDF Exporter] Progress \uBC1C\uACAC (satRoot text regex): ${mostCommon}`);
-        console.log(`[DIAG] progress text raw: "${satRootText.slice(0, 200)}"`);
-        return mostCommon;
-      }
-    }
-    const satRootProgressElements = satRoot.querySelectorAll('[class*="progress"], [aria-label*="progress"], [class*="indicator"]');
-    for (const el of satRootProgressElements) {
-      if (!isElementVisible(el)) continue;
-      const text = (el.innerText || el.textContent || "").trim();
-      const match = text.match(/(\d+)\s*\/\s*(\d+)/);
-      if (match) {
-        const current = parseInt(match[1]);
-        const total = parseInt(match[2]);
-        if (current > 0 && current <= total && (total === 27 || total === 22)) {
-          console.log(`[SAT PDF Exporter] Progress \uBC1C\uACAC (satRoot selector): ${match[0]}`);
-          return match[0];
-        }
-      }
-    }
-    console.error("[DIAG] Progress\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. satRoot snippet:", satRoot?.innerText?.slice(0, 500));
+    console.warn("[DIAG] Progress\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4 (progress element\uB9CC \uC0AC\uC6A9, satRoot text \uBBF8\uC0AC\uC6A9).");
     return null;
   }
   function getCurrentProblemNumber() {
-    const satRoot = findSatRoot();
-    if (!satRoot) {
-      console.warn("[DIAG] satRoot not found, problem number \uD310\uB3C5 \uC2E4\uD328");
-      return 0;
+    const satRoot2 = findSatRoot();
+    const prog = (satRoot2 ? readProgressNumber(satRoot2) : null) || readProgressNumber(document);
+    if (prog && prog.cur >= 1) {
+      return prog.cur;
     }
-    const progressSelectors = [
-      '[class*="progress"]',
-      '[class*="indicator"]',
-      '[aria-label*="progress"]',
-      '[class*="slider"]',
-      '[class*="step"]'
-    ];
+    if (!satRoot2) return 1;
+    const progressSelectors = ['[class*="progress"]', '[class*="indicator"]', '[aria-label*="progress"]'];
     for (const selector of progressSelectors) {
-      const elements = satRoot.querySelectorAll(selector);
-      for (const el of elements) {
-        if (!isElementVisible(el)) continue;
-        const text = (el.innerText || el.textContent || "").trim();
-        const match2 = text.match(/\b(\d+)\s*\/\s*(27|22)\b/);
-        if (match2) {
-          const num = parseInt(match2[1]);
-          const total = parseInt(match2[2]);
-          if (num > 0 && num <= total) {
-            console.log(`[SAT PDF Exporter] \uBB38\uC81C \uBC88\uD638 \uBC1C\uACAC (satRoot progress UI): ${num}/27 (raw: "${text}")`);
-            fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:getCurrentProblemNumber:found1", message: "getCurrentProblemNumber found via progress UI", data: { num, text, method: "progressUI" }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "E" }) }).catch(() => {
-            });
-            return num;
-          }
+      for (const el of satRoot2.querySelectorAll(selector)) {
+        const text = (el.textContent || "").trim();
+        const match = text.match(/\b(\d+)\s*\/\s*(27|22)\b/);
+        if (match) {
+          const num = parseInt(match[1]);
+          if (num > 0 && num <= parseInt(match[2])) return num;
         }
       }
     }
-    const satRootText = satRoot.innerText || satRoot.textContent || "";
-    const match = satRootText.match(/\b(\d+)\s*\/\s*(27|22)\b/);
-    if (match) {
-      const num = parseInt(match[1]);
-      const total = parseInt(match[2]);
-      if (num > 0 && num <= total) {
-        console.log(`[SAT PDF Exporter] \uBB38\uC81C \uBC88\uD638 \uBC1C\uACAC (satRoot text): ${num}/27`);
-        fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:getCurrentProblemNumber:found2", message: "getCurrentProblemNumber found via satRoot text", data: { num, method: "satRootText" }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "E" }) }).catch(() => {
-        });
-        return num;
+    for (const el of satRoot2.querySelectorAll('[class*="question"], [class*="problem"], [class*="number"]')) {
+      const text = (el.textContent || "").trim();
+      const m = text.match(/^(\d+)\./);
+      if (m) {
+        const num = parseInt(m[1]);
+        if (num > 0 && num <= 27) return num;
       }
     }
-    const problemNumberElements = satRoot.querySelectorAll('[class*="question"], [class*="problem"], [class*="number"]');
-    for (const el of problemNumberElements) {
-      if (!isElementVisible(el)) continue;
-      const text = (el.innerText || el.textContent || "").trim();
-      const numMatch = text.match(/^(\d+)\./);
-      if (numMatch) {
-        const num = parseInt(numMatch[1]);
-        if (num > 0 && num <= 27) {
-          console.log(`[SAT PDF Exporter] \uBB38\uC81C \uBC88\uD638 \uBC1C\uACAC (satRoot \uD14D\uC2A4\uD2B8 \uD328\uD134): ${num}`);
-          fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:getCurrentProblemNumber:found3", message: "getCurrentProblemNumber found via text pattern", data: { num, text, method: "textPattern" }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "E" }) }).catch(() => {
-          });
-          return num;
-        }
-      }
-    }
-    console.warn("[SAT PDF Exporter] \uBB38\uC81C \uBC88\uD638\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uAE30\uBCF8\uAC12 1 \uC0AC\uC6A9");
-    const defaultReturn = 1;
-    fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:getCurrentProblemNumber:default", message: "getCurrentProblemNumber returning default 1", data: { satRootFound: !!satRoot, defaultReturn }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "E" }) }).catch(() => {
-    });
-    return defaultReturn;
+    return 1;
   }
   function getQuestionSignature() {
     const bodyText = (document.body.innerText || document.body.textContent || "").trim();
@@ -9355,13 +9329,13 @@
     if (window !== window.top && !window.__SAT_IS_WORKER) {
       console.warn("[SAT-DEBUG] [isGraded] Worker frame\uC774 \uC544\uB2CC iframe\uC5D0\uC11C \uC2E4\uD589 - \uACBD\uACE0\uB9CC \uCD9C\uB825");
     }
-    const satRoot = findSatRoot();
-    if (!satRoot) {
+    const satRoot2 = findSatRoot();
+    if (!satRoot2) {
       return false;
     }
-    const hasAnsweredClass = !!satRoot.querySelector('[class*="answered-correct"], [class*="answered-incorrect"]');
-    const hasCorrectAria = !!satRoot.querySelector('[aria-label*="Correct" i], [aria-label*="Incorrect" i], [aria-label*="\uC815\uB2F5"], [aria-label*="\uC624\uB2F5"]');
-    const hasExplanation = !!satRoot.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]');
+    const hasAnsweredClass = !!satRoot2.querySelector('[class*="answered-correct"], [class*="answered-incorrect"]');
+    const hasCorrectAria = !!satRoot2.querySelector('[aria-label*="Correct" i], [aria-label*="Incorrect" i], [aria-label*="\uC815\uB2F5"], [aria-label*="\uC624\uB2F5"]');
+    const hasExplanation = !!satRoot2.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]');
     const result = hasAnsweredClass || hasCorrectAria || hasExplanation;
     if (typeof window !== "undefined" && window.location) {
       const logData = {
@@ -9372,7 +9346,7 @@
           hasCorrectAria,
           hasExplanation,
           result,
-          satRootExists: !!satRoot
+          satRootExists: !!satRoot2
         },
         timestamp: Date.now(),
         sessionId: "debug-session",
@@ -9390,8 +9364,8 @@
   }
   async function waitForGrading(timeoutMs = 6e3) {
     console.log("[GRADING] \uCC44\uC810 \uB300\uAE30 \uC2DC\uC791 (\uC5C4\uACA9\uD55C \uC870\uAC74: \uC815\uB2F5 \uD45C\uC2DC \uD655\uC778)");
-    const satRoot = findSatRoot();
-    if (!satRoot) {
+    const satRoot2 = findSatRoot();
+    if (!satRoot2) {
       console.error("[GRADING] satRoot not found, \uCC44\uC810 \uB300\uAE30 \uC2E4\uD328");
       if (typeof window !== "undefined" && window.location) {
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", {
@@ -9417,16 +9391,16 @@
       const checkGrading = () => {
         if (resolved) return;
         const progressState = getProgressState();
-        const answeredCorrect = satRoot.querySelector('[class*="answered-correct"]');
-        const answeredIncorrect = satRoot.querySelector('[class*="answered-incorrect"]');
-        const correctAria = satRoot.querySelector('[aria-label*="Correct" i], [aria-label*="\uC815\uB2F5"]');
-        const incorrectAria = satRoot.querySelector('[aria-label*="Incorrect" i], [aria-label*="\uC624\uB2F5"]');
-        const explanation = satRoot.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]');
-        const options = satRoot.querySelectorAll('[role="radio"], button[aria-label*="Choice"], [class*="option"], .mat-mdc-list-item');
+        const answeredCorrect = satRoot2.querySelector('[class*="answered-correct"]');
+        const answeredIncorrect = satRoot2.querySelector('[class*="answered-incorrect"]');
+        const correctAria = satRoot2.querySelector('[aria-label*="Correct" i], [aria-label*="\uC815\uB2F5"]');
+        const incorrectAria = satRoot2.querySelector('[aria-label*="Incorrect" i], [aria-label*="\uC624\uB2F5"]');
+        const explanation = satRoot2.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]');
+        const options = satRoot2.querySelectorAll('[role="radio"], button[aria-label*="Choice"], [class*="option"], .mat-mdc-list-item');
         let foundCorrectOption = false;
         let foundIncorrectOption = false;
         for (const opt of options) {
-          if (!isElementVisible(opt) || !satRoot.contains(opt)) continue;
+          if (!isElementVisible(opt) || !satRoot2.contains(opt)) continue;
           const className = opt.className || "";
           const ariaLabel = (opt.getAttribute("aria-label") || "").toLowerCase();
           if (/\banswered-correct\b/.test(className) || /\bcorrect\b/.test(className) || ariaLabel.includes("correct") || ariaLabel.includes("\uC815\uB2F5")) {
@@ -9453,7 +9427,7 @@
               isGradedNow,
               optionsCount: options.length,
               elapsedMs: Date.now() - startTime,
-              satRootTextSlice: (satRoot.innerText || "").substring(0, 400)
+              satRootTextSlice: (satRoot2.innerText || "").substring(0, 400)
             },
             timestamp: Date.now(),
             sessionId: "debug-session",
@@ -9477,15 +9451,15 @@
         if (Date.now() - startTime >= timeoutMs) {
           resolved = true;
           console.error(`[GRADING] \u2717 \uCC44\uC810 \uB300\uAE30 \uD0C0\uC784\uC544\uC6C3 (${timeoutMs}ms)`);
-          console.error(`[DIAG] satRoot snippet:`, satRoot?.innerText?.slice(0, 500));
+          console.error(`[DIAG] satRoot snippet:`, satRoot2?.innerText?.slice(0, 500));
           if (typeof window !== "undefined" && window.location) {
             const logData = {
               location: "extract.js:waitForGrading:timeout",
               message: "grading timeout",
               data: {
                 elapsedMs: Date.now() - startTime,
-                satRootHTMLSlice: (satRoot.innerHTML || "").substring(0, 800),
-                satRootTextSlice: (satRoot.innerText || "").substring(0, 400)
+                satRootHTMLSlice: (satRoot2.innerHTML || "").substring(0, 800),
+                satRootTextSlice: (satRoot2.innerText || "").substring(0, 400)
               },
               timestamp: Date.now(),
               sessionId: "debug-session",
@@ -9513,8 +9487,8 @@
       console.warn("[SAT-DEBUG] [detectCorrectAnswer] Worker frame\uC774 \uC544\uB2CC iframe\uC5D0\uC11C \uC2E4\uD589 \uC2DC\uB3C4 - \uC2A4\uD0B5");
       return null;
     }
-    const satRoot = findSatRoot();
-    if (!satRoot) {
+    const satRoot2 = findSatRoot();
+    if (!satRoot2) {
       console.error("[ANSWER] satRoot not found, \uC815\uB2F5 \uCD94\uCD9C \uC2E4\uD328");
       if (typeof window !== "undefined" && window.location) {
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", {
@@ -9534,7 +9508,7 @@
       }
       return null;
     }
-    const explanationBlocks = satRoot.querySelectorAll('.explanation[class*="answered"], [class*="explanation"]');
+    const explanationBlocks = satRoot2.querySelectorAll('.explanation[class*="answered"], [class*="explanation"]');
     for (const block of explanationBlocks) {
       if (!isElementVisible(block)) continue;
       const optionTextContainer = block.querySelector(".option-text-container");
@@ -9578,9 +9552,9 @@
     ];
     const candidates = [];
     for (const selector of optionSelectors) {
-      const elements = satRoot.querySelectorAll(selector);
+      const elements = satRoot2.querySelectorAll(selector);
       for (const el of elements) {
-        if (!isElementVisible(el) || !satRoot.contains(el)) continue;
+        if (!isElementVisible(el) || !satRoot2.contains(el)) continue;
         if (candidates.find((c) => c.element === el)) continue;
         candidates.push({ element: el, selector });
       }
@@ -9641,7 +9615,7 @@
             visible: c.visible,
             index: c.index
           })),
-          satRootTextSlice: (satRoot.innerText || "").substring(0, 400)
+          satRootTextSlice: (satRoot2.innerText || "").substring(0, 400)
         },
         timestamp: Date.now(),
         sessionId: "debug-session",
@@ -9711,7 +9685,7 @@
       '[class*="\uD574\uC124"]'
     ];
     for (const selector of explanationSelectors) {
-      const explanationEl = satRoot.querySelector(selector);
+      const explanationEl = satRoot2.querySelector(selector);
       if (explanationEl && isElementVisible(explanationEl)) {
         const text = (explanationEl.innerText || explanationEl.textContent || "").trim();
         const match = text.match(/(?:Correct answer|정답|Answer)[:\s]*([A-D])/i);
@@ -9722,7 +9696,7 @@
         }
       }
     }
-    const allOptionsWithText = satRoot.querySelectorAll("*");
+    const allOptionsWithText = satRoot2.querySelectorAll("*");
     for (const el of allOptionsWithText) {
       if (!isElementVisible(el)) continue;
       const text = (el.innerText || el.textContent || "").toLowerCase();
@@ -9772,10 +9746,10 @@
     } catch {
     }
     if (optionCandidates.length === 0) {
-      const textOptionEls = Array.from(satRoot.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter((el) => {
+      const textOptionEls = Array.from(satRoot2.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter((el) => {
         try {
           const r = el.getBoundingClientRect();
-          return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot.contains(el);
+          return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot2.contains(el);
         } catch {
           return false;
         }
@@ -9804,8 +9778,8 @@
             ariaLabel: c.ariaLabel,
             visible: c.visible
           })),
-          satRootHTMLSlice: (satRoot.innerHTML || "").substring(0, 800),
-          satRootTextSlice: (satRoot.innerText || "").substring(0, 400)
+          satRootHTMLSlice: (satRoot2.innerHTML || "").substring(0, 800),
+          satRootTextSlice: (satRoot2.innerText || "").substring(0, 400)
         },
         timestamp: Date.now(),
         sessionId: "debug-session",
@@ -9837,8 +9811,8 @@
       console.warn("[SAT-DEBUG] [extractExplanationAfterGrading] Worker frame\uC774 \uC544\uB2CC iframe\uC5D0\uC11C \uC2E4\uD589 \uC2DC\uB3C4 - \uC2A4\uD0B5");
       return "";
     }
-    const satRoot = findSatRoot();
-    if (!satRoot) {
+    const satRoot2 = findSatRoot();
+    if (!satRoot2) {
       console.warn("[SAT PDF Exporter] satRoot not found, Explanation \uCD94\uCD9C \uC2E4\uD328");
       return "";
     }
@@ -9847,7 +9821,7 @@
     fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractExplanationAfterGrading:satRootFound", message: "satRoot found, checking problem number", data: { satRootProgress, satRootProblemNum, currentProblemNum }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
     });
     if (!correctAnswer) {
-      const explanationTextContainers = satRoot.querySelectorAll(
+      const explanationTextContainers = satRoot2.querySelectorAll(
         '.explanation-text, [class*="explanation-text"]'
       );
       for (const container of explanationTextContainers) {
@@ -9861,7 +9835,7 @@
           return cleaned;
         }
       }
-      const explanationBlocks = satRoot.querySelectorAll('.explanation[class*="answered"], [class*="explanation"]');
+      const explanationBlocks = satRoot2.querySelectorAll('.explanation[class*="answered"], [class*="explanation"]');
       for (const block of explanationBlocks) {
         const optionText = block.querySelector(".option-text-container");
         if (!optionText) continue;
@@ -9886,9 +9860,9 @@
       ];
       const candidates = [];
       for (const selector of optionSelectors) {
-        const elements = satRoot.querySelectorAll(selector);
+        const elements = satRoot2.querySelectorAll(selector);
         for (const el of elements) {
-          if (!isElementVisible(el) || !satRoot.contains(el)) continue;
+          if (!isElementVisible(el) || !satRoot2.contains(el)) continue;
           if (candidates.find((c) => c.element === el)) continue;
           candidates.push({ element: el, selector });
         }
@@ -9935,10 +9909,10 @@
         }
       }
       if (!correctOptionElement && correctAnswer) {
-        const textOptionEls = Array.from(satRoot.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter((el) => {
+        const textOptionEls = Array.from(satRoot2.querySelectorAll('div, span, p, li, button, [role="button"], label')).filter((el) => {
           try {
             const r = el.getBoundingClientRect();
-            return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot.contains(el);
+            return r.width >= 20 && r.height >= 20 && isElementVisible(el) && satRoot2.contains(el);
           } catch {
             return false;
           }
@@ -10015,7 +9989,7 @@
     ];
     let foundExplanations = [];
     for (const selector of explanationSelectors) {
-      const elements = satRoot.querySelectorAll(selector);
+      const elements = satRoot2.querySelectorAll(selector);
       console.log(`[SAT PDF Exporter] \uD3F4\uBC31: ${selector}\uB85C ${elements.length}\uAC1C \uC694\uC18C \uBC1C\uACAC`);
       for (const element of elements) {
         if (!isElementVisible(element)) continue;
@@ -10050,11 +10024,11 @@
       });
       return foundExplanations[0].text;
     }
-    const gradedBoxes = satRoot.querySelectorAll('[class*="correct"], [class*="incorrect"], [class*="\uC815\uB2F5"], [class*="\uC624\uB2F5"]');
+    const gradedBoxes = satRoot2.querySelectorAll('[class*="correct"], [class*="incorrect"], [class*="\uC815\uB2F5"], [class*="\uC624\uB2F5"]');
     for (const box of gradedBoxes) {
       if (!isElementVisible(box)) continue;
       const parent = box.closest('[class*="container"], [class*="content"], [class*="card"]');
-      if (parent && satRoot.contains(parent)) {
+      if (parent && satRoot2.contains(parent)) {
         const fullText = (parent.innerText || parent.textContent || "").trim();
         const explanationMatch = fullText.split(/정답입니다|This is correct|정답|Correct/i)[1];
         if (explanationMatch) {
@@ -10075,7 +10049,7 @@
           location: "extract.js:extractExplanationAfterGrading:notFound",
           message: "explanation not found",
           data: {
-            satRootTextSlice: (satRoot.innerText || "").substring(0, 400),
+            satRootTextSlice: (satRoot2.innerText || "").substring(0, 400),
             gradedBoxesCount: gradedBoxes.length
           },
           timestamp: Date.now(),
@@ -10167,7 +10141,7 @@
     });
     return problems;
   }
-  function extractReadingSection() {
+  async function extractReadingSection() {
     const problems = [];
     console.log("[SAT PDF Exporter] Reading \uC139\uC158 \uCD94\uCD9C \uC2DC\uC791");
     const problemNum = getCurrentProblemNumber();
@@ -10203,7 +10177,8 @@
         problemText = problemText.split(/[A-D][\.\)]\s*/)[0].trim();
       }
     }
-    const choices = extractChoices(document.body);
+    const rootForPdf = await getRootForExtract();
+    const choices = rootForPdf ? extractChoicesSafe(rootForPdf) : [];
     const answer = extractAnswer(document.body);
     const explanation = extractExplanation(document.body);
     if (problemText) {
@@ -10226,7 +10201,7 @@
     }
     return problems;
   }
-  function extractMathSection() {
+  async function extractMathSection() {
     const problems = [];
     console.log("[SAT PDF Exporter] Math \uC139\uC158 \uCD94\uCD9C \uC2DC\uC791");
     const problemNum = getCurrentProblemNumber();
@@ -10257,7 +10232,8 @@
         problemText = problemText.split(/[A-D][\.\)]\s*/)[0].trim();
       }
     }
-    const choices = extractChoices(document.body);
+    const rootForMath = await getRootForExtract();
+    const choices = rootForMath ? extractChoicesSafe(rootForMath) : [];
     const isGridIn = choices.length === 0;
     const answer = extractAnswer(document.body);
     const explanation = extractExplanation(document.body);
@@ -10288,7 +10264,7 @@
     }
     return problems;
   }
-  function extractSATData() {
+  async function extractSATData() {
     const data = {
       reading: [],
       math: [],
@@ -10298,23 +10274,23 @@
       const currentSection = detectCurrentSection();
       if (currentSection === "reading") {
         console.log("[SAT PDF Exporter] Reading \uC139\uC158\uC73C\uB85C \uAC10\uC9C0\uB428 - Reading\uB9CC \uCD94\uCD9C");
-        const readingSection = extractReadingSection();
+        const readingSection = await extractReadingSection();
         if (readingSection.length > 0) {
           data.reading = readingSection;
         }
       } else if (currentSection === "math") {
         console.log("[SAT PDF Exporter] Math \uC139\uC158\uC73C\uB85C \uAC10\uC9C0\uB428 - Math\uB9CC \uCD94\uCD9C");
-        const mathSection = extractMathSection();
+        const mathSection = await extractMathSection();
         if (mathSection.length > 0) {
           data.math = mathSection;
         }
       } else {
         console.warn("[SAT PDF Exporter] \uC139\uC158 \uAC10\uC9C0 \uC2E4\uD328 - Reading\uACFC Math \uBAA8\uB450 \uC2DC\uB3C4 (\uBE44\uAD8C\uC7A5)");
-        const readingSection = extractReadingSection();
+        const readingSection = await extractReadingSection();
         if (readingSection.length > 0) {
           data.reading = readingSection;
         }
-        const mathSection = extractMathSection();
+        const mathSection = await extractMathSection();
         if (mathSection.length > 0) {
           data.math = mathSection;
         }
@@ -10403,11 +10379,16 @@
     }
     return null;
   }
+  var CHOICE_VIS_WAIT_MS, CHOICE_VIS_MAX_ITER, BTN_SEL, SEL_OPTION;
   var init_extract = __esm({
     "src/dom/extract.js"() {
       init_deepQuery();
       init_query();
       init_query();
+      CHOICE_VIS_WAIT_MS = 80;
+      CHOICE_VIS_MAX_ITER = 20;
+      BTN_SEL = "mat-action-list.choices-container button";
+      SEL_OPTION = "mat-action-list.choices-container button.mat-mdc-list-item.option, button.mat-mdc-list-item.option";
     }
   });
 
@@ -10431,31 +10412,31 @@
     },
     // 타임아웃 설정 (밀리초) - 속도 최적화 (문제 스크랩 집중)
     timeouts: {
-      elementWait: 80,
+      elementWait: 25,
       // 요소 대기 간격
-      maxElementWait: 2500,
+      maxElementWait: 1e3,
       // 최대 요소 대기 시간
-      screenTransition: 150,
-      // 화면 전환 대기 (UI 반응 빠름)
-      contentLoad: 150,
+      screenTransition: 35,
+      // 화면 전환 대기
+      contentLoad: 50,
       // 콘텐츠 로드 대기
-      gradingWait: 1e3,
+      gradingWait: 200,
       // 채점 완료 대기
-      clickDelay: 120,
+      clickDelay: 30,
       // 클릭 후 대기
-      scrollDelay: 150,
+      scrollDelay: 35,
       // 스크롤 후 대기
       pdfDownloadDelay: 300,
-      // PDF 다운로드 간격
-      // 문제 생성 탭: 선지 선택 구간 대기 (너무 빨리 지나가는 것 방지, 특히 사진 있는 문제)
-      beforeChoiceClick: 400,
-      // 선지 클릭 전 대기 (문제/선지 인지 시간)
-      beforeChoiceClickWithImage: 2800,
-      // 이미지 있는 문제: 선지 클릭 전 2.8초 대기
-      afterChoiceClick: 450,
+      // PDF 다운로드 간격 (연속 4개 안정화)
+      // 문제 생성 탭: 선지 선택 구간 대기
+      beforeChoiceClick: 20,
+      // 선지 클릭 전 대기
+      beforeChoiceClickWithImage: 80,
+      // 이미지 있는 문제: 선지 클릭 전 대기
+      afterChoiceClick: 20,
       // 선지 클릭 후 제출 전 대기
-      afterChoiceClickWithImage: 2800
-      // 이미지 있는 문제: 선지 클릭 후 2.8초 대기
+      afterChoiceClickWithImage: 80
+      // 이미지 있는 문제: 선지 클릭 후 대기
     },
     // 재시도 설정
     retries: {
@@ -10548,6 +10529,338 @@
 
   // src/dom/wait.js
   init_deepQuery();
+  init_query();
+
+  // src/dom/navGuard.js
+  var DANGER_HOSTS = ["support.google.com", "policies.google.com"];
+  function getOriginSafe(urlStr, baseOrigin) {
+    if (!urlStr || typeof urlStr !== "string") return null;
+    const s = urlStr.trim();
+    if (!s || s === "#") return baseOrigin;
+    try {
+      return new URL(s, baseOrigin || "https://example.com").origin;
+    } catch {
+      return baseOrigin;
+    }
+  }
+  function isDangerousUrl(href, allowedOrigin) {
+    if (!href || typeof href !== "string") return false;
+    const origin = getOriginSafe(href, allowedOrigin);
+    if (!origin) return false;
+    const lower = href.toLowerCase();
+    if (DANGER_HOSTS.some((h) => lower.includes(h))) return true;
+    if (origin !== allowedOrigin) return true;
+    return false;
+  }
+  function logBlocked(payload) {
+    const stack = new Error().stack || "";
+    console.warn("[NAVGUARD] BLOCKED", {
+      ...payload,
+      stack: stack.split("\n").slice(2).join("\n")
+    });
+  }
+  var saved = null;
+  function installNavGuard(isActive) {
+    const w = typeof window !== "undefined" ? window : globalThis;
+    const doc = w.document;
+    if (!w || !doc) return;
+    if (saved) return;
+    const allowedOrigin = w.location?.origin || "";
+    const _open = w.open;
+    const _anchorClick = w.HTMLAnchorElement?.prototype?.click;
+    const _assign = w.location?.assign;
+    const _replace = w.location?.replace;
+    w.open = function openGuard(url, target, features) {
+      if (!isActive()) return _open.apply(this, arguments);
+      const urlStr = url != null ? String(url) : "";
+      if (isDangerousUrl(urlStr, allowedOrigin)) {
+        logBlocked({
+          reason: "window.open",
+          url: urlStr,
+          exportRunning: true,
+          frame: w === w.top ? "top" : "iframe"
+        });
+        return null;
+      }
+      return _open.apply(this, arguments);
+    };
+    if (_anchorClick) {
+      w.HTMLAnchorElement.prototype.click = function anchorClickGuard() {
+        if (!isActive()) return _anchorClick.apply(this, arguments);
+        const href = this.href || this.getAttribute?.("href") || "";
+        const target = (this.getAttribute?.("target") || "").toLowerCase();
+        const block = isDangerousUrl(href, allowedOrigin) || target === "_blank" && href && getOriginSafe(href, allowedOrigin) !== allowedOrigin;
+        if (block) {
+          logBlocked({
+            reason: "HTMLAnchorElement.click",
+            href,
+            target: this.getAttribute?.("target") || "",
+            exportRunning: true,
+            frame: w === w.top ? "top" : "iframe",
+            tagName: this.tagName
+          });
+          return;
+        }
+        return _anchorClick.apply(this, arguments);
+      };
+    }
+    if (_assign && w.location) {
+      w.location.assign = function assignGuard(url) {
+        if (isActive() && isDangerousUrl(String(url || ""), allowedOrigin)) {
+          logBlocked({ reason: "location.assign", url: String(url), exportRunning: true, frame: w === w.top ? "top" : "iframe" });
+          return;
+        }
+        return _assign.apply(this, arguments);
+      };
+    }
+    if (_replace && w.location) {
+      w.location.replace = function replaceGuard(url) {
+        if (isActive() && isDangerousUrl(String(url || ""), allowedOrigin)) {
+          logBlocked({ reason: "location.replace", url: String(url), exportRunning: true, frame: w === w.top ? "top" : "iframe" });
+          return;
+        }
+        return _replace.apply(this, arguments);
+      };
+    }
+    saved = { open: _open, anchorClick: _anchorClick, assign: _assign, replace: _replace, window: w };
+  }
+  function uninstallNavGuard() {
+    if (!saved) return;
+    const w = saved.window;
+    try {
+      w.open = saved.open;
+      if (saved.anchorClick && w.HTMLAnchorElement?.prototype) {
+        w.HTMLAnchorElement.prototype.click = saved.anchorClick;
+      }
+      if (saved.assign && w.location) w.location.assign = saved.assign;
+      if (saved.replace && w.location) w.location.replace = saved.replace;
+    } catch (e) {
+      console.warn("[NAVGUARD] uninstall error", e);
+    }
+    saved = null;
+  }
+  function installClickLogger(isActive) {
+    const w = typeof window !== "undefined" ? window : globalThis;
+    const doc = w?.document;
+    if (!doc) return () => {
+    };
+    const handler = (e) => {
+      if (!isActive()) return;
+      const t = e.target;
+      const a = t?.closest?.("a[href]") || (t?.tagName === "A" ? t : null);
+      const href = a?.getAttribute?.("href") ?? a?.href ?? "";
+      const path = e.composedPath?.()?.slice?.(0, 4)?.map?.((n) => n?.tagName || n?.nodeName) ?? [];
+      console.log("[NAVGUARD] click log", {
+        isTrusted: e.isTrusted,
+        targetTag: t?.tagName,
+        href: href ? String(href).slice(0, 120) : "",
+        composedPath: path,
+        frame: w === w.top ? "top" : "iframe"
+      });
+    };
+    doc.addEventListener("click", handler, true);
+    return () => doc.removeEventListener("click", handler, true);
+  }
+
+  // src/dom/navGuardMainSource.js
+  var NAV_GUARD_MAIN_SOURCE = `(function(){
+  var DANGER_HOSTS = ['support.google.com', 'policies.google.com'];
+  function getOriginSafe(urlStr, baseOrigin) {
+    if (!urlStr || typeof urlStr !== 'string') return null;
+    var s = String(urlStr).trim();
+    if (!s || s === '#') return baseOrigin;
+    try { return new URL(s, baseOrigin || 'https://example.com').origin; } catch (e) { return baseOrigin; }
+  }
+  function isDangerousUrl(href, allowedOrigin) {
+    if (!href || typeof href !== 'string') return false;
+    var origin = getOriginSafe(href, allowedOrigin);
+    if (!origin) return false;
+    var lower = String(href).toLowerCase();
+    for (var i = 0; i < DANGER_HOSTS.length; i++) { if (lower.indexOf(DANGER_HOSTS[i]) !== -1) return true; }
+    if (origin !== allowedOrigin) return true;
+    return false;
+  }
+  function logBlocked(payload) {
+    var err = new Error();
+    console.warn('[NAVGUARD_MAIN] BLOCKED', Object.assign({}, payload, { stack: err.stack || '' }));
+  }
+  if (typeof window === 'undefined') return;
+  if (window.__SAT_NAV_GUARD_INSTALLED) return;
+  window.__SAT_NAV_GUARD_INSTALLED = true;
+  var w = window, doc = w.document;
+  var allowedOrigin = (w.location && w.location.origin) ? w.location.origin : '';
+  var exportRunning = false, saved = null, captureListeners = [];
+  function installPatches() {
+    if (saved) return;
+    var _open = w.open, _anchorClick = w.HTMLAnchorElement && w.HTMLAnchorElement.prototype && w.HTMLAnchorElement.prototype.click;
+    var _assign = w.location && w.location.assign, _replace = w.location && w.location.replace;
+    w.open = function(url, target, features) {
+      if (!exportRunning) return _open.apply(this, arguments);
+      var urlStr = url != null ? String(url) : '';
+      if (isDangerousUrl(urlStr, allowedOrigin)) { logBlocked({ reason: 'window.open', url: urlStr }); return null; }
+      return _open.apply(this, arguments);
+    };
+    if (_anchorClick) {
+      w.HTMLAnchorElement.prototype.click = function() {
+        if (!exportRunning) return _anchorClick.apply(this, arguments);
+        var href = this.href || (this.getAttribute && this.getAttribute('href')) || '';
+        var target = ((this.getAttribute && this.getAttribute('target')) || '').toLowerCase();
+        var block = isDangerousUrl(href, allowedOrigin) || (target === '_blank' && href && getOriginSafe(href, allowedOrigin) !== allowedOrigin);
+        if (block) { logBlocked({ reason: 'HTMLAnchorElement.click', href: href, target: target }); return; }
+        return _anchorClick.apply(this, arguments);
+      };
+    }
+    if (_assign && w.location) {
+      w.location.assign = function(url) {
+        if (exportRunning && isDangerousUrl(String(url || ''), allowedOrigin)) { logBlocked({ reason: 'location.assign', url: String(url) }); return; }
+        return _assign.apply(this, arguments);
+      };
+    }
+    if (_replace && w.location) {
+      w.location.replace = function(url) {
+        if (exportRunning && isDangerousUrl(String(url || ''), allowedOrigin)) { logBlocked({ reason: 'location.replace', url: String(url) }); return; }
+        return _replace.apply(this, arguments);
+      };
+    }
+    saved = { open: _open, anchorClick: _anchorClick, assign: _assign, replace: _replace };
+  }
+  function uninstallPatches() {
+    if (!saved) return;
+    try {
+      w.open = saved.open;
+      if (saved.anchorClick && w.HTMLAnchorElement && w.HTMLAnchorElement.prototype) w.HTMLAnchorElement.prototype.click = saved.anchorClick;
+      if (saved.assign && w.location) w.location.assign = saved.assign;
+      if (saved.replace && w.location) w.location.replace = saved.replace;
+    } catch (e) { console.warn('[NAVGUARD_MAIN] uninstall error', e); }
+    saved = null;
+  }
+  function blockIfDangerousLink(e) {
+    if (!exportRunning) return;
+    var a = (e.target && e.target.closest && e.target.closest('a[href]')) || (e.target && e.target.tagName === 'A' ? e.target : null);
+    if (!a) return;
+    var href = (a.getAttribute && a.getAttribute('href')) || a.href || '';
+    var target = ((a.getAttribute && a.getAttribute('target')) || '').toLowerCase();
+    if (!href) return;
+    var block = isDangerousUrl(href, allowedOrigin) || (target === '_blank' && getOriginSafe(href, allowedOrigin) !== allowedOrigin);
+    if (block) { e.preventDefault(); e.stopImmediatePropagation(); logBlocked({ reason: 'capture_' + e.type, href: href, target: target }); }
+  }
+  function installCaptureListeners() {
+    if (captureListeners.length) return;
+    var events = ['click', 'auxclick', 'pointerup', 'mouseup'];
+    for (var i = 0; i < events.length; i++) { doc.addEventListener(events[i], blockIfDangerousLink, true); captureListeners.push({ ev: events[i], h: blockIfDangerousLink }); }
+    var keyHandler = function(e) {
+      if (!exportRunning || (e.key !== 'Enter' && e.key !== ' ')) return;
+      var a = (e.target && e.target.closest && e.target.closest('a[href]')) || (e.target && e.target.tagName === 'A' ? e.target : null);
+      if (!a) return;
+      var href = (a.getAttribute && a.getAttribute('href')) || a.href || '';
+      if (!href || !isDangerousUrl(href, allowedOrigin)) return;
+      e.preventDefault(); e.stopImmediatePropagation(); logBlocked({ reason: 'keydown', href: href });
+    };
+    doc.addEventListener('keydown', keyHandler, true);
+    captureListeners.push({ ev: 'keydown', h: keyHandler });
+  }
+  function uninstallCaptureListeners() {
+    for (var i = 0; i < captureListeners.length; i++) doc.removeEventListener(captureListeners[i].ev, captureListeners[i].h, true);
+    captureListeners = [];
+  }
+  w.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'SAT_EXPORT_RUNNING') {
+      exportRunning = !!e.data.value;
+      console.log('[NAVGUARD_MAIN] message', { value: exportRunning, href: w.location.href, isTop: w === w.top });
+      if (exportRunning) { installPatches(); installCaptureListeners(); }
+      else { uninstallPatches(); uninstallCaptureListeners(); }
+    }
+  });
+  console.log('[NAVGUARD_MAIN] installed', { href: w.location.href, isTop: w === w.top, hasOpenerPatch: !!w.__SAT_NAV_GUARD_INSTALLED });
+})();`;
+
+  // src/dom/wait.js
+  var exportRunning = false;
+  var clickLoggerRemove = null;
+  var mainInjectedByDoc = /* @__PURE__ */ new WeakMap();
+  var EXPORT_MSG = { type: "SAT_EXPORT_RUNNING" };
+  function injectNavGuardMainIntoDocument(doc, frameLabel) {
+    try {
+      if (mainInjectedByDoc.get(doc)) return true;
+      if (!doc.head && !doc.documentElement) return false;
+      const script = doc.createElement("script");
+      script.textContent = NAV_GUARD_MAIN_SOURCE;
+      (doc.head || doc.documentElement).appendChild(script);
+      script.remove();
+      mainInjectedByDoc.set(doc, true);
+      console.log("[EXPORT] MAIN injected into frame", { frame: frameLabel, href: doc.defaultView?.location?.href || doc.URL });
+      return true;
+    } catch (e) {
+      console.warn("[NAVGUARD] MAIN inject error", frameLabel, e);
+      return false;
+    }
+  }
+  function ensureNavGuardMainInjectedAllFrames() {
+    const win = typeof window !== "undefined" ? window : null;
+    if (!win || !win.document) return;
+    const isTop = win === win.top;
+    injectNavGuardMainIntoDocument(win.document, isTop ? "top" : "iframe-self");
+    try {
+      for (let i = 0; i < win.frames.length; i++) {
+        const f = win.frames[i];
+        try {
+          if (f.document && !mainInjectedByDoc.get(f.document)) {
+            injectNavGuardMainIntoDocument(f.document, "frame-" + i + "-" + (f.location?.href || "").slice(0, 50));
+          }
+        } catch (e) {
+          console.warn("[EXPORT] frame inject skip (same-origin?)", i, e?.message);
+        }
+      }
+      if (!isTop && win.top && win.top.document) {
+        injectNavGuardMainIntoDocument(win.top.document, "top-from-iframe");
+      }
+    } catch (e) {
+      console.warn("[EXPORT] frames iteration error", e);
+    }
+  }
+  function setExportRunning(running) {
+    exportRunning = !!running;
+    const frameHref = typeof location !== "undefined" ? location.href : "";
+    const isTop = typeof window !== "undefined" && window === window.top;
+    console.log("[EXPORT] setExportRunning", { running: exportRunning, frameHref, isTop });
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+      try {
+        chrome.runtime.sendMessage({ type: "EXPORT_RUNNING", value: exportRunning }).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
+    if (exportRunning) {
+      ensureNavGuardMainInjectedAllFrames();
+      const msg = Object.assign({}, EXPORT_MSG, { value: true });
+      try {
+        window.postMessage(msg, "*");
+      } catch (e) {
+      }
+      try {
+        if (window.top && window.top !== window) window.top.postMessage(msg, "*");
+      } catch (e) {
+      }
+      installNavGuard(() => exportRunning);
+      if (clickLoggerRemove) clickLoggerRemove();
+      clickLoggerRemove = installClickLogger(() => exportRunning);
+    } else {
+      const msg = Object.assign({}, EXPORT_MSG, { value: false });
+      try {
+        window.postMessage(msg, "*");
+      } catch (e) {
+      }
+      try {
+        if (window.top && window.top !== window) window.top.postMessage(msg, "*");
+      } catch (e) {
+      }
+      uninstallNavGuard();
+      if (clickLoggerRemove) {
+        clickLoggerRemove();
+        clickLoggerRemove = null;
+      }
+    }
+  }
   async function waitForElement(selector, retries = CONFIG.retries.elementFind, interval = CONFIG.timeouts.elementWait) {
     for (let i = 0; i < retries; i++) {
       let element = null;
@@ -10575,7 +10888,7 @@
     }
     return false;
   }
-  function waitForContentLoad(delay = 1e3) {
+  function waitForContentLoad(delay = 150) {
     return new Promise((resolve) => {
       let observer;
       let timeout;
@@ -10634,6 +10947,7 @@
       return false;
     }
     const currentUrl = window.location.href;
+    const MIN_RECT_SIZE = 5;
     for (let i = 0; i < retries; i++) {
       try {
         console.log(`[SAT-DEBUG] forceClick \uC2DC\uB3C4 ${i + 1}/${retries}`);
@@ -10642,6 +10956,31 @@
         const rect = button.getBoundingClientRect();
         const centerX = rect.left + rect.width / 2;
         const centerY = rect.top + rect.height / 2;
+        const rectInvalid = typeof rect.width !== "number" || typeof rect.height !== "number" || Number.isNaN(rect.width) || Number.isNaN(rect.height) || rect.width < MIN_RECT_SIZE || rect.height < MIN_RECT_SIZE;
+        if (rectInvalid) {
+          console.warn("[SAFECLICK] forceClick BAD_RECT: abort", { width: rect.width, height: rect.height });
+          if (i === retries - 1) return false;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        const topEl = document.elementFromPoint(centerX, centerY);
+        const satRoot2 = findSatRoot();
+        const anchor = topEl?.tagName === "A" ? topEl : topEl?.closest?.("a");
+        const href = anchor?.getAttribute("href") || "";
+        if (href && (href.includes("support.google.com") || href.includes("policies.google.com"))) {
+          console.warn("[SAFECLICK] forceClick blocked: \uB9C1\uD06C(\uAC1C\uC778\uC815\uBCF4/\uB3C4\uC6C0\uB9D0) \uD074\uB9AD \uBC29\uC9C0", { cx: centerX, cy: centerY, topElTag: topEl?.tagName, href });
+          return false;
+        }
+        if (topEl && satRoot2 && satRoot2 !== document.body && !satRoot2.contains(topEl)) {
+          console.warn("[SAFECLICK] forceClick blocked click outside satRoot", { cx: centerX, cy: centerY, topElTag: topEl.tagName, href: href || null });
+          return false;
+        }
+        if (!topEl) {
+          console.warn("[SAFECLICK] forceClick blocked: no element at point", { cx: centerX, cy: centerY });
+          if (i === retries - 1) return false;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
         const pointerDownEvent = new PointerEvent("pointerdown", {
           view: window,
           bubbles: true,
@@ -10736,8 +11075,28 @@
     }
     for (let i = 0; i < retries; i++) {
       try {
+        fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "wait.js:safeClick:attempt", message: "OPEN_CLICK safeClick attempt", data: { attempt: i + 1, retries, tagName: button?.tagName }, timestamp: Date.now(), hypothesisId: "E" }) }).catch(() => {
+        });
+        console.warn("[OPEN_CLICK] safeClick attempt", { attempt: i + 1, retries, tagName: button?.tagName });
         button.scrollIntoView({ behavior: "smooth", block: "center" });
         await new Promise((resolve) => setTimeout(resolve, CONFIG.timeouts.scrollDelay));
+        const rect = button.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const topEl = document.elementFromPoint(cx, cy);
+        const anchor = topEl?.tagName === "A" ? topEl : topEl?.closest?.("a");
+        const hitHref = anchor?.getAttribute("href") || "";
+        if (hitHref && (hitHref.includes("support.google.com") || hitHref.includes("policies.google.com"))) {
+          console.warn("[SAFECLICK] safeClick: \uD574\uB2F9 \uC88C\uD45C\uC5D0 \uAC1C\uC778\uC815\uBCF4/\uB3C4\uC6C0\uB9D0 \uB9C1\uD06C \uC788\uC74C, \uD074\uB9AD \uC2A4\uD0B5", { cx, cy, href: hitHref });
+          return false;
+        }
+        if (topEl && !button.contains(topEl) && !topEl.contains(button)) {
+          const extHref = topEl.tagName === "A" ? topEl.getAttribute("href") : topEl.closest?.("a")?.getAttribute("href") || "";
+          if (extHref && extHref.startsWith("http")) {
+            console.warn("[SAFECLICK] safeClick: \uD074\uB9AD \uC88C\uD45C\uAC00 \uBC84\uD2BC \uBC16 \uC678\uBD80 \uB9C1\uD06C \uC704", { cx, cy, topElTag: topEl.tagName });
+            return false;
+          }
+        }
         const mouseEvent = new MouseEvent("click", {
           view: window,
           bubbles: true,
@@ -10833,7 +11192,7 @@
   init_query();
   init_query();
   init_query();
-  function readProgressNumber() {
+  function readProgressNumber2() {
     const progressState = getProgressState();
     if (!progressState) return null;
     const match = progressState.match(/(\d+)\s*\/\s*(\d+)/);
@@ -10842,41 +11201,45 @@
     }
     return null;
   }
+  function isSafeButton(btn) {
+    if (btn.tagName === "A") {
+      const href = btn.getAttribute("href");
+      const target = btn.getAttribute("target");
+      if (href && (href.startsWith("http") || target === "_blank" || target === "_new")) return false;
+      if (href && href !== "#" && !href.startsWith("javascript:")) return false;
+    }
+    if (btn.hasAttribute("href") && btn.getAttribute("href") !== "#" && !btn.getAttribute("href").startsWith("javascript:")) return false;
+    if (btn.getAttribute("target") === "_blank" || btn.getAttribute("target") === "_new") return false;
+    return true;
+  }
   function findButtonByText(...labels) {
     const buttons = Array.from(deepQuerySelectorAll('button, [role="button"]'));
     return buttons.find((btn) => {
       if (!isElementVisible(btn) || btn.disabled) return false;
-      if (btn.tagName === "A") {
-        const href = btn.getAttribute("href");
-        const target = btn.getAttribute("target");
-        if (href && (href.startsWith("http") || target === "_blank" || target === "_new")) {
-          console.warn("[SAT-DEBUG] \uC678\uBD80 \uB9C1\uD06C \uC81C\uC678:", href, target);
-          return false;
-        }
-        if (href && href !== "#" && !href.startsWith("javascript:")) {
-          console.warn("[SAT-DEBUG] \uB124\uBE44\uAC8C\uC774\uC158 \uB9C1\uD06C \uC81C\uC678:", href);
-          return false;
-        }
-      }
-      if (btn.hasAttribute("href") && btn.getAttribute("href") !== "#" && !btn.getAttribute("href").startsWith("javascript:")) {
-        console.warn("[SAT-DEBUG] href \uC18D\uC131 \uC788\uB294 \uC694\uC18C \uC81C\uC678:", btn.getAttribute("href"));
-        return false;
-      }
-      if (btn.getAttribute("target") === "_blank" || btn.getAttribute("target") === "_new") {
-        console.warn("[SAT-DEBUG] \uC0C8 \uCC3D \uC5F4\uAE30 \uC18D\uC131 \uC788\uB294 \uC694\uC18C \uC81C\uC678");
+      if (!isSafeButton(btn)) {
+        if (btn.tagName === "A" || btn.hasAttribute("href")) console.warn("[SAT-DEBUG] \uB9C1\uD06C/\uC0C8\uCC3D \uC694\uC18C \uC81C\uC678:", btn.getAttribute?.("href"), btn.getAttribute?.("target"));
         return false;
       }
       const text = (btn.innerText || btn.textContent || "").trim();
       const ariaLabel = (btn.getAttribute("aria-label") || "").trim();
-      return labels.some(
-        (label) => text.includes(label) || ariaLabel.includes(label)
-      );
+      return labels.some((label) => text.includes(label) || ariaLabel.includes(label));
     });
+  }
+  function findButtonByTextInRoot(root, ...labels) {
+    if (!root || !root.querySelectorAll) return findButtonByText(...labels);
+    const buttons = Array.from(deepQuerySelectorAll('button, [role="button"]', root));
+    return buttons.find((btn) => {
+      if (!isElementVisible(btn) || btn.disabled) return false;
+      if (!isSafeButton(btn)) return false;
+      const text = (btn.innerText || btn.textContent || "").trim();
+      const ariaLabel = (btn.getAttribute("aria-label") || "").trim();
+      return labels.some((label) => text.includes(label) || ariaLabel.includes(label));
+    }) || null;
   }
   async function clickSubmitWithConfirmation(onAfterConfirmClick) {
     console.log("[SUBMIT] \uC81C\uCD9C \uBC84\uD2BC \uCC3E\uB294 \uC911...");
-    const satRoot = findSatRoot();
-    if (!satRoot) {
+    const satRoot2 = findSatRoot();
+    if (!satRoot2) {
       console.error("[SUBMIT] satRoot not found, \uC81C\uCD9C \uBC84\uD2BC \uCC3E\uAE30 \uC2E4\uD328");
       return false;
     }
@@ -10902,22 +11265,19 @@
     const SUBMIT_KEYWORDS_KO = ["\uC81C\uCD9C", "\uC815\uB2F5", "\uD655\uC778", "\uCC44\uC810", "\uC815\uB2F5 \uD655\uC778", "\uC815\uB2F5\uD655\uC778", "\uCC44\uC810\uD558\uAE30", "\uC815\uB2F5\uBCF4\uAE30"];
     const SUBMIT_KEYWORDS_EN = ["submit", "check", "answer", "confirm", "check answer", "checkanswer", "show answer", "view answer"];
     await new Promise((resolve) => setTimeout(resolve, 15));
-    const allButtons = Array.from(satRoot.querySelectorAll('button, [role="button"]'));
+    const allButtons = Array.from(satRoot2.querySelectorAll('button, [role="button"]'));
     console.log(`[SUBMIT] satRoot \uB0B4\uBD80 \uBC84\uD2BC: ${allButtons.length}\uAC1C`);
-    const visibleButtons = allButtons.filter((b) => {
-      if (!isElementVisible(b)) return false;
+    let buttonsToScore = allButtons.filter((b) => {
       if (b.disabled) return false;
-      if (!satRoot.contains(b)) return false;
+      if (!satRoot2.contains(b)) return false;
       return true;
     });
-    console.log(`[DIAG] buttons visible:`, visibleButtons.slice(0, 5).map((b) => ({
-      text: (b.innerText || b.textContent || "").trim().substring(0, 30),
-      ariaLabel: b.getAttribute("aria-label") || "none",
-      testid: b.getAttribute("data-testid") || "none",
-      disabled: b.disabled
-    })));
+    const visibleButtons = buttonsToScore.filter((b) => isElementVisible(b));
+    if (visibleButtons.length > 0) buttonsToScore = visibleButtons;
+    else console.log("[SUBMIT] visible \uBC84\uD2BC 0\uAC1C \u2192 \uC874\uC7AC \uAE30\uC900\uC73C\uB85C \uC81C\uCD9C \uBC84\uD2BC \uAC80\uC0C9");
+    console.log(`[DIAG] buttons to score: ${buttonsToScore.length} (visible: ${visibleButtons.length})`);
     const candidates = [];
-    for (const btn of visibleButtons) {
+    for (const btn of buttonsToScore) {
       const text = (btn.innerText || btn.textContent || "").trim();
       const ariaLabel = (btn.getAttribute("aria-label") || "").trim();
       const dataTestId = (btn.getAttribute("data-testid") || "").trim();
@@ -10943,15 +11303,14 @@
     }
     candidates.sort((a, b) => b.score - a.score);
     if (candidates.length === 0) {
-      console.error("[SUBMIT] \uC81C\uCD9C \uBC84\uD2BC\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-      console.error("[DIAG] satRoot snippet:", satRoot?.innerText?.slice(0, 500));
-      return false;
+      console.log("[SUBMIT] \uC81C\uCD9C \uBC84\uD2BC \uC5C6\uC74C \u2014 \uC989\uC2DC \uCC44\uC810 \uACBD\uB85C\uB85C \uAC04\uC8FC, grading \uB300\uAE30\uB85C \uC9C4\uD589");
+      return true;
     }
     const submitButton = candidates[0].button;
     console.log(`[SUBMIT] \uC81C\uCD9C \uBC84\uD2BC \uBC1C\uACAC: "${candidates[0].text}" (\uC810\uC218: ${candidates[0].score})`);
-    console.log("[SUBMIT] \uC81C\uCD9C \uBC84\uD2BC \uD074\uB9AD");
-    submitButton.scrollIntoView({ behavior: "smooth", block: "center" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    console.log("[SUBMIT] \uC81C\uCD9C \uBC84\uD2BC scrollIntoView \uD6C4 \uD074\uB9AD");
+    submitButton.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    await new Promise((resolve) => setTimeout(resolve, 80));
     submitButton.click();
     await waitForContentLoad(120);
     const maxWait = 40;
@@ -10974,7 +11333,7 @@
         if (confirmSubmitButton) break;
       }
       if (!confirmSubmitButton) {
-        const satRootButtons = satRoot.querySelectorAll('button, [role="button"]');
+        const satRootButtons = satRoot2.querySelectorAll('button, [role="button"]');
         for (const btn of satRootButtons) {
           if (!isElementVisible(btn) || btn.disabled) continue;
           const text = (btn.innerText || btn.textContent || "").trim();
@@ -11013,7 +11372,7 @@
         console.log(`[SAT PDF Exporter] \uB2E4\uC74C \uBC84\uD2BC \uD074\uB9AD \uC7AC\uC2DC\uB3C4 ${retry}/${maxRetries}`);
         await new Promise((resolve) => setTimeout(resolve, 80));
       }
-      const prevProgress = readProgressNumber();
+      const prevProgress = readProgressNumber2();
       console.log(`[SAT-DEBUG] [STEP 2] \uD074\uB9AD \uC804 \uC9C4\uD589 \uC0C1\uD669: ${prevProgress}`);
       let nextButton = null;
       nextButton = selectNextButton();
@@ -11138,7 +11497,7 @@
         clickCount++;
         clickPerformed = true;
         console.log(`[NEXT-DEBUG] \u2713 Next \uBC84\uD2BC \uD074\uB9AD \uC644\uB8CC: click() \uBA54\uC11C\uB4DC \uC0AC\uC6A9, callId=${callId}, clickCount=${clickCount}`);
-        await new Promise((resolve) => setTimeout(resolve, 120));
+        await new Promise((resolve) => setTimeout(resolve, 50));
       } catch (e) {
         console.warn("[SAT-DEBUG] click() \uBA54\uC11C\uB4DC \uC2E4\uD328, dispatchEvent \uD3F4\uBC31 \uC2DC\uB3C4:", e);
         clickPerformed = false;
@@ -11150,7 +11509,7 @@
       while (attempts < maxAttempts && !success && clickPerformed) {
         await new Promise((resolve) => setTimeout(resolve, 80));
         attempts++;
-        const nextProgress = readProgressNumber();
+        const nextProgress = readProgressNumber2();
         if (prevProgress !== null && nextProgress !== null) {
           progressDelta = nextProgress - prevProgress;
           console.log(`[SAT-DEBUG] [STEP 2] \uC9C4\uD589 \uC0C1\uD669 \uB378\uD0C0: ${prevProgress} \u2192 ${nextProgress} (\uB378\uD0C0: ${progressDelta})`);
@@ -11165,7 +11524,7 @@
                 await new Promise((resolve) => setTimeout(resolve, 120));
                 altButton.click();
                 await new Promise((resolve) => setTimeout(resolve, 80));
-                const altNextProgress = readProgressNumber();
+                const altNextProgress = readProgressNumber2();
                 if (altNextProgress !== null && prevProgress !== null) {
                   const altDelta = altNextProgress - prevProgress;
                   console.log(`[SAT-DEBUG] [STEP 2] \uB300\uCCB4 \uD6C4\uBCF4 \uACB0\uACFC: ${prevProgress} \u2192 ${altNextProgress} (\uB378\uD0C0: ${altDelta})`);
@@ -11283,12 +11642,18 @@
     console.error("[SAT PDF Exporter] [DEBUG] Fail Stage: \uB2E4\uC74C \uBC84\uD2BC \uD074\uB9AD \uB2E8\uACC4 - \uCD5C\uC885 \uC2E4\uD328 (\uBAA8\uB4E0 \uD3F4\uBC31 \uC2DC\uB3C4 \uC644\uB8CC)");
     return false;
   }
-  async function clickFirstChoice(sectionType = "reading") {
+  async function clickFirstChoice(sectionType = "reading", container = null) {
     console.log("[CHOICE] \uC120\uC9C0 \uD074\uB9AD \uB2E8\uACC4 \uC2DC\uC791");
+    if (!container || !container.querySelectorAll) {
+      const err = new Error("clickFirstChoice: root required (pass root from moduleRunner)");
+      err.code = "NO_ROOT";
+      throw err;
+    }
+    const root = container;
     if (sectionType === "math") {
       console.log("[SAT-DEBUG] \uC218\uD559 \uC139\uC158 - \uC8FC\uAD00\uC2DD \uC785\uB825\uCC3D \uC6B0\uC120 \uD0D0\uC0C9");
       const combinedSel = 'input[type="number"], input[type="text"][inputmode="numeric"], input[type="text"][pattern*="[0-9]"], input[placeholder*="\uC785\uB825"], input[placeholder*="\uC5EC\uAE30\uC5D0"], input[placeholder*="Enter"], textarea[placeholder*="\uC785\uB825"], textarea[placeholder*="\uC5EC\uAE30\uC5D0"], input[type="text"], textarea';
-      const allInputs = deepQuerySelectorAll(combinedSel, document.body);
+      const allInputs = deepQuerySelectorAll(combinedSel, root);
       const numberInputs = allInputs.filter((inp) => {
         const plc = (inp.getAttribute("placeholder") || "").toLowerCase();
         const isChatInput = plc.includes("message") || plc.includes("chat") || plc.includes("\uBA54\uC2DC\uC9C0") || inp.closest('[class*="chat-input"], [class*="message-input"]');
@@ -11321,17 +11686,49 @@
         return true;
       }
     }
-    const { extractChoices: extractChoices2 } = await Promise.resolve().then(() => (init_extract(), extract_exports));
-    console.log("[CHOICE] extractChoices() \uD638\uCD9C\uD558\uC5EC \uC120\uD0DD\uC9C0 \uD6C4\uBCF4 \uAC00\uC838\uC624\uAE30...");
-    const extractedChoices = extractChoices2(document.body);
-    console.log(`[CHOICE] extractChoices \uACB0\uACFC: ${extractedChoices.length}\uAC1C \uC120\uD0DD\uC9C0 \uBC1C\uACAC`);
+    const firstOptionBtn = root.querySelector("mat-action-list.choices-container button");
+    if (firstOptionBtn) {
+      const before = firstOptionBtn.className;
+      firstOptionBtn.click();
+      await new Promise((r) => setTimeout(r, 150));
+      const after = firstOptionBtn.className;
+      console.log("[CLICK-DEBUG]", { before, after });
+      if (after !== before || /answered|selected/.test(after)) return true;
+    }
+    const { extractChoices: extractChoices2, ensureChoicesPresent: ensureChoicesPresent2 } = await Promise.resolve().then(() => (init_extract(), extract_exports));
+    const problemNum = typeof getCurrentProblemNumber === "function" ? getCurrentProblemNumber() : null;
+    if (sectionType === "reading") {
+      const choicesReady = await waitForCondition(() => {
+        try {
+          return extractChoices2(root).length >= 4;
+        } catch (_) {
+          return false;
+        }
+      }, 5e3, 150);
+      if (!choicesReady) console.warn("[CHOICE-CLICK] \uB9AC\uB529: 5\uCD08 \uB0B4 \uC120\uC9C0 4\uAC1C \uBBF8\uB4F1\uC7A5, ensureChoicesPresent \uC2DC\uB3C4");
+    }
+    await ensureChoicesPresent2(root);
+    let extractedChoices;
+    try {
+      extractedChoices = extractChoices2(root);
+    } catch (e) {
+      if (e?.code === "CHOICES_NOT_FOUND") throw e;
+      throw e;
+    }
+    if (!extractedChoices || extractedChoices.length === 0) {
+      const snippetCount = root.querySelectorAll?.('mat-action-list.choices-container button, .mat-mdc-radio-button, [role="radio"], mat-list-option')?.length ?? 0;
+      const err = new Error(`NO_CHOICES_EXTRACTED problem=${problemNum ?? "?"} snippetCount=${snippetCount}`);
+      err.code = "NO_CHOICES_EXTRACTED";
+      throw err;
+    }
+    extractedChoices = extractedChoices.filter((c) => c && c.element);
     if (extractedChoices.length === 0) {
-      console.error("[CHOICE] extractChoices\uAC00 \uC120\uD0DD\uC9C0\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      console.error("[CHOICE] element\uAC00 \uC788\uB294 \uC120\uD0DD\uC9C0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return false;
     }
     const candidates = extractedChoices.filter((choice) => {
       const el = choice.element;
-      if (!el || !isElementVisible(el) || el.disabled) return false;
+      if (!el || el.disabled) return false;
       const isTextFallback = choice.source === "\uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31" || choice.priority === 5;
       if (isTextFallback) {
         console.log(`[CHOICE] \uD14D\uC2A4\uD2B8 \uAE30\uBC18 \uD3F4\uBC31 \uD6C4\uBCF4 ${choice.label}: \uC120\uD0DD \uC5EC\uBD80 \uCCB4\uD06C \uC2A4\uD0B5 (\uBB34\uC870\uAC74 \uD074\uB9AD)`);
@@ -11379,80 +11776,202 @@
       };
     }).filter((c) => c.isClickable);
     if (clickTargets.length === 0) {
-      console.error("[CHOICE] \uD074\uB9AD \uAC00\uB2A5\uD55C \uD0C0\uAC9F\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
-      return false;
+      const snippetCount = document.querySelectorAll?.('.mat-mdc-radio-button, [role="radio"], input[type="radio"], mat-list-option')?.length ?? 0;
+      const err = new Error(`NO_CHOICES_EXTRACTED problem=${problemNum ?? "?"} candidates=${candidates.length} but clickTargets=0 snippetCount=${snippetCount}`);
+      err.code = "NO_CHOICES_EXTRACTED";
+      throw err;
     }
     const firstChoice = clickTargets.find((c) => c.letter === "A") || clickTargets[0];
-    const targetElement = firstChoice.element;
-    console.log(`[CHOICE] picked candidate text="${firstChoice.text.substring(0, 30)}", letter=${firstChoice.letter}`);
-    const beforeClass = targetElement.className;
-    const beforeAriaDisabled = targetElement.getAttribute("aria-disabled");
-    const beforeDisabled = targetElement.disabled;
-    console.log(`[CHOICE] state before:`, {
-      className: beforeClass,
-      ariaDisabled: beforeAriaDisabled,
-      disabled: beforeDisabled
-    });
-    try {
-      targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      targetElement.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1
-      }));
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      targetElement.dispatchEvent(new MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true,
-        buttons: 1
-      }));
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      targetElement.dispatchEvent(new MouseEvent("mouseup", {
-        bubbles: true,
-        cancelable: true,
-        buttons: 1
-      }));
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      targetElement.click();
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      const afterClass = targetElement.className;
-      const afterAriaDisabled = targetElement.getAttribute("aria-disabled");
-      const afterDisabled = targetElement.disabled;
-      console.log(`[CHOICE] state after:`, {
-        className: afterClass,
-        ariaDisabled: afterAriaDisabled,
-        disabled: afterDisabled
-      });
-      const classChanged = beforeClass !== afterClass;
-      const graded = /answered-(correct|incorrect)/.test(afterClass);
-      const disabledNow = afterClass.includes("mdc-list-item--disabled") || afterAriaDisabled === "true" || afterDisabled || afterClass.includes("disabled") && !beforeClass.includes("disabled");
-      const clickSuccess = classChanged || graded || disabledNow;
-      console.log(`[CHOICE] state changed? ${clickSuccess} (classChanged: ${classChanged}, graded: ${graded}, disabledNow: ${disabledNow})`);
-      if (clickSuccess) {
-        console.log(`[CHOICE] \u2713 \uD074\uB9AD \uC131\uACF5: \uC0C1\uD0DC \uBCC0\uD654 \uD655\uC778\uB428`);
-        return true;
-      } else {
-        console.warn(`[CHOICE] \u2717 \uD074\uB9AD \uC2E4\uD328: \uC0C1\uD0DC \uBCC0\uD654 \uC5C6\uC74C. \uB2E4\uB978 \uD6C4\uBCF4 \uC2DC\uB3C4...`);
-        for (let i = 1; i < Math.min(3, clickTargets.length); i++) {
-          const nextTarget = clickTargets[i];
-          console.log(`[CHOICE] \uC7AC\uC2DC\uB3C4 ${i}: ${nextTarget.letter} \uC120\uD0DD`);
-          const retryBeforeClass = nextTarget.element.className;
-          nextTarget.element.scrollIntoView({ behavior: "smooth", block: "center" });
-          await new Promise((resolve) => setTimeout(resolve, 20));
-          nextTarget.element.click();
-          await new Promise((resolve) => setTimeout(resolve, 25));
-          const retryAfterClass = nextTarget.element.className;
-          const retryGraded = /answered-(correct|incorrect)/.test(retryAfterClass);
-          const retryDisabled = retryAfterClass.includes("mdc-list-item--disabled") || nextTarget.element.getAttribute("aria-disabled") === "true" || nextTarget.element.disabled;
-          if (retryBeforeClass !== retryAfterClass || retryGraded || retryDisabled) {
-            console.log(`[CHOICE] \u2713 \uC7AC\uC2DC\uB3C4 \uC131\uACF5: ${nextTarget.letter}`);
-            return true;
-          }
+    const rawElement = firstChoice.element;
+    const candidatesToTry = [rawElement, ...clickTargets.slice(1).map((c) => c.element)];
+    function isSelectionVerified(el) {
+      if (!el) return false;
+      const root2 = el.closest('[role="group"], [class*="list"], [class*="option"], [class*="choice"]') || el;
+      const check = (n) => {
+        if (!n) return false;
+        if (n.getAttribute("aria-checked") === "true" || n.getAttribute("aria-selected") === "true") return true;
+        if (n.type === "radio" && n.checked) return true;
+        if (n.getAttribute("data-selected") === "true" || n.getAttribute("data-checked") === "true") return true;
+        const c = (n.className || "") + " " + (n.getAttribute("class") || "");
+        if (/\bselected\b|\bchecked\b|mdc-list-item--selected|mat-list-option-selected|mdc-radio--selected|answered-(correct|incorrect)/.test(c)) return true;
+        return false;
+      };
+      const nodes = [el, root2, ...Array.from(root2.querySelectorAll && root2.querySelectorAll('[role="radio"], [role="option"], input[type="radio"], .mdc-radio, .mat-mdc-list-option') || [])];
+      return nodes.some(check);
+    }
+    function resolveClickable(el) {
+      const isClickable = (n) => {
+        if (!n || n.disabled) return false;
+        const r = n.getAttribute("role");
+        if (r === "radio" || r === "option") return true;
+        if (n.tagName === "LABEL") return true;
+        if (n.querySelector && n.querySelector('input[type="radio"]')) return true;
+        if (n.tagName === "BUTTON") return true;
+        const c = (n.className || "") + "";
+        if (/\blist-item\b|\boption\b|mat-mdc-list-option|mat-mdc-radio-button|mat-radio-button/.test(c)) return true;
+        return false;
+      };
+      let p = el;
+      while (p && p !== document.body) {
+        if (isClickable(p)) return p;
+        const child = p.querySelector && p.querySelector('[role="radio"], [role="option"], button, label, .mdc-list-item__content, .mdc-radio, .mat-mdc-list-item, .mat-mdc-radio-button, .mat-radio-button');
+        if (child && el.contains(child)) return child;
+        p = p.parentElement;
+      }
+      return el;
+    }
+    function getScrollableParent2(el) {
+      let p = el && el.parentElement;
+      while (p) {
+        try {
+          const style = window.getComputedStyle(p);
+          if (/(auto|scroll|overlay)/.test(style.overflowY || "") && p.scrollHeight > p.clientHeight) return p;
+        } catch (_) {
         }
-        console.error(`[CHOICE] \u2717 \uBAA8\uB4E0 \uD6C4\uBCF4 \uD074\uB9AD \uC2E4\uD328`);
+        p = p.parentElement;
+      }
+      return null;
+    }
+    function scrollIntoViewWithinParent(el) {
+      const parent = getScrollableParent2(el);
+      if (!parent) {
+        el.scrollIntoView({ block: "center" });
+        return;
+      }
+      const er = el.getBoundingClientRect();
+      const pr = parent.getBoundingClientRect();
+      parent.scrollTop += er.top + er.height / 2 - (pr.top + pr.height / 2);
+    }
+    function waitFrames(n = 2) {
+      return new Promise((r) => {
+        let count = 0;
+        function tick() {
+          requestAnimationFrame(() => {
+            count++;
+            if (count >= n) r();
+            else tick();
+          });
+        }
+        tick();
+      });
+    }
+    function ensureCenterInViewport(el) {
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const bounds = satRoot ? satRoot.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+      const right = bounds.left + bounds.width, bottom = bounds.top + bounds.height;
+      if (cx < bounds.left || cx > right || cy < bounds.top || cy > bottom) {
+        scrollIntoViewWithinParent(el);
         return false;
       }
+      return true;
+    }
+    const MIN_RECT_SIZE = 5;
+    function safeClickGuard(cx, cy, satRootRef, context) {
+      const topEl = document.elementFromPoint(cx, cy);
+      if (!topEl) {
+        console.warn("[SAFECLICK] blocked click: no element at point", { cx, cy, ...context });
+        return { ok: false, reason: "NO_ELEMENT", topEl: null };
+      }
+      if (satRootRef && !satRootRef.contains(topEl)) {
+        const href = topEl.tagName === "A" ? topEl.getAttribute("href") : topEl.closest?.("a")?.getAttribute("href") || null;
+        console.warn("[SAFECLICK] blocked click outside satRoot", { cx, cy, topElTag: topEl.tagName, href, ...context });
+        return { ok: false, reason: "OUTSIDE_SATROOT", topEl };
+      }
+      return { ok: true, topEl };
+    }
+    async function attemptClickWithStrategy(choiceEl, strategy) {
+      const clickable = resolveClickable(choiceEl);
+      scrollIntoViewWithinParent(choiceEl);
+      await waitFrames(2);
+      ensureCenterInViewport(choiceEl);
+      await new Promise((r2) => setTimeout(r2, 30));
+      const r = clickable.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const rectInvalid = typeof r.width !== "number" || typeof r.height !== "number" || Number.isNaN(r.width) || Number.isNaN(r.height) || r.width < MIN_RECT_SIZE || r.height < MIN_RECT_SIZE;
+      if (rectInvalid) {
+        console.warn("[SAFECLICK] BAD_RECT: abort click", { width: r.width, height: r.height, strategy });
+        return false;
+      }
+      const topEl = document.elementFromPoint(cx, cy);
+      const isOptionOrChild = topEl && (choiceEl.contains(topEl) || topEl.contains(choiceEl));
+      const guard = safeClickGuard(cx, cy, satRoot, { strategy });
+      if (!guard.ok) {
+        if (guard.reason === "OUTSIDE_SATROOT") return false;
+        if (guard.reason === "NO_ELEMENT") return false;
+      }
+      if (strategy === "A") {
+        if (satRoot && !satRoot.contains(clickable)) {
+          console.warn("[SAFECLICK] strategy A: clickable outside satRoot, skip click");
+          return false;
+        }
+        clickable.click();
+      } else if (strategy === "B") {
+        ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
+          clickable.dispatchEvent(new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: cx,
+            clientY: cy,
+            buttons: type === "mouseup" || type === "click" ? 0 : 1
+          }));
+        });
+      } else if (strategy === "C") {
+        if (topEl && !isOptionOrChild) {
+          const overlay = topEl;
+          const prev = overlay.style.pointerEvents;
+          overlay.style.pointerEvents = "none";
+          void document.body.offsetHeight;
+          await new Promise((r2) => setTimeout(r2, 20));
+          clickable.click();
+          await new Promise((r2) => setTimeout(r2, 30));
+          overlay.style.pointerEvents = prev;
+        } else {
+          let ancestor = topEl || clickable;
+          while (ancestor && ancestor !== document.body) {
+            const role = ancestor.getAttribute("role");
+            if (role === "radio" || role === "option" || ancestor.tagName === "LABEL" || ancestor.querySelector?.('input[type="radio"]')) {
+              ancestor.click();
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
+          if (!ancestor || ancestor === document.body) clickable.click();
+        }
+      }
+      await new Promise((r2) => setTimeout(r2, 80));
+      let verified = isSelectionVerified(choiceEl);
+      if (!verified) {
+        for (let p = 0; p < 3; p++) {
+          await new Promise((r2) => setTimeout(r2, 60));
+          verified = isSelectionVerified(choiceEl);
+          if (verified) break;
+        }
+      }
+      const signal = choiceEl.getAttribute("aria-checked") === "true" ? "aria-checked" : choiceEl.getAttribute("aria-selected") === "true" ? "aria-selected" : /answered-(correct|incorrect)|\bselected\b|\bchecked\b/.test(choiceEl.className || "") ? "class" : "";
+      console.log(`[CHOICE-CLICK] strategy=${strategy} topEl=${topEl?.tagName || "null"} isOptionOrChild=${isOptionOrChild} verified=${verified} signal=${signal || "none"}`);
+      fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "buttons.js:attemptClickWithStrategy", message: "choice click attempt", data: { strategy, topElTag: topEl?.tagName || "null", isOptionOrChild, verified, signal: signal || "none" }, timestamp: Date.now() }) }).catch(() => {
+      });
+      return verified;
+    }
+    try {
+      for (let cIdx = 0; cIdx < Math.min(3, candidatesToTry.length); cIdx++) {
+        const choiceEl = candidatesToTry[cIdx];
+        const letter = clickTargets[cIdx]?.letter || ["A", "B", "C", "D"][cIdx];
+        console.log(`[CHOICE] attempt ${cIdx + 1} letter=${letter}`);
+        for (const strat of ["A", "B", "C"]) {
+          const ok = await attemptClickWithStrategy(choiceEl, strat);
+          if (ok) {
+            console.log(`[CHOICE] \u2713 \uC120\uD0DD \uC131\uACF5 (strategy=${strat} letter=${letter})`);
+            return true;
+          }
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+      console.error("[CHOICE] \u2717 \uBAA8\uB4E0 \uC804\uB7B5 \uC2E4\uD328 - \uC120\uC9C0 \uC120\uD0DD \uD655\uC815 \uBD88\uAC00");
+      return false;
     } catch (error) {
       console.error("[CHOICE] \uD074\uB9AD \uC911 \uC624\uB958:", error);
       return false;
@@ -11462,6 +11981,7 @@
   // src/flow/navigator.js
   init_deepQuery();
   init_extract();
+  init_query();
   var SATNavigator = class {
     /**
      * 텍스트로 버튼 찾기 (다국어 지원)
@@ -11480,18 +12000,22 @@
       }) || null;
     }
     /**
-     * '열기' 버튼 찾기 및 클릭
+     * '열기' 버튼 찾기 및 클릭. 후보는 <button> 또는 role="button"만 허용, <a>/href/target=_blank 완전 제외.
      * @returns {Promise<boolean>} 성공 여부
      */
     async clickOpenButton() {
-      console.log("[SAT-DEBUG] \uD604\uC7AC \uB2E8\uACC4: \uC5F4\uAE30 \uBC84\uD2BC \uCC3E\uAE30 \uC2DC\uC791");
+      const OPEN_WHITELIST = ["\uC5F4\uAE30", "Open", "Start", "\uC2DC\uC791", "\uD14C\uC2A4\uD2B8 \uC2DC\uC791", "Start Test", "\uBAA8\uB4C8 \uC2DC\uC791"];
+      console.log("[SAT-DEBUG] \uD604\uC7AC \uB2E8\uACC4: \uC5F4\uAE30 \uBC84\uD2BC \uCC3E\uAE30 \uC2DC\uC791 (button/role=button\uB9CC)");
       const openButton = await waitForElement(() => {
-        const allButtons = deepQuerySelectorAll(CONFIG.selectors.button + ", a, div[onclick], span[onclick]");
-        for (const btn of allButtons) {
+        const candidates = deepQuerySelectorAll('button, [role="button"]');
+        for (const btn of candidates) {
           try {
+            if (btn.tagName === "A" || btn.hasAttribute("href") || btn.getAttribute("target") === "_blank" || btn.getAttribute("target") === "_new") continue;
             if (!isElementVisible(btn) || btn.disabled) continue;
             const btnText = (btn.innerText || btn.textContent || "").trim();
-            if (CONFIG.buttonTexts.open.some((text) => btnText.includes(text))) {
+            const ariaLabel = (btn.getAttribute("aria-label") || "").trim();
+            const matches = OPEN_WHITELIST.some((t) => btnText.includes(t) || ariaLabel.includes(t));
+            if (matches) {
               console.log("[SAT-DEBUG] \uC5F4\uAE30 \uBC84\uD2BC \uBC1C\uACAC:", btnText);
               return btn;
             }
@@ -11501,12 +12025,30 @@
         }
         return null;
       }, CONFIG.retries.elementFind);
-      if (openButton) {
-        console.log("[SATNavigator] \uC5F4\uAE30 \uBC84\uD2BC \uBC1C\uACAC, \uD074\uB9AD \uC2DC\uB3C4");
-        return await safeClick(openButton);
+      if (!openButton) {
+        console.warn("[SATNavigator] \uC5F4\uAE30 \uBC84\uD2BC\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        return false;
       }
-      console.warn("[SATNavigator] \uC5F4\uAE30 \uBC84\uD2BC\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-      return false;
+      const rect = openButton.getBoundingClientRect();
+      const candidateMeta = {
+        tagName: openButton.tagName,
+        role: openButton.getAttribute("role") || "",
+        text: (openButton.innerText || openButton.textContent || "").trim().slice(0, 80),
+        href: openButton.getAttribute("href") || (openButton.href || ""),
+        target: openButton.getAttribute("target") || "",
+        hasOnclick: !!openButton.getAttribute("onclick"),
+        outerHTMLSlice: (openButton.outerHTML || "").slice(0, 200),
+        rect: { width: rect.width, height: rect.height, top: rect.top, left: rect.left },
+        frameHref: typeof location !== "undefined" ? location.href : ""
+      };
+      console.warn("[OPEN_CLICK] about_to_click", { candidateMeta, stack: (new Error().stack || "").split("\n").slice(2).join("\n") });
+      fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "navigator.js:clickOpenButton:about_to_click", message: "OPEN_CLICK about_to_click", data: { candidateMeta }, timestamp: Date.now(), hypothesisId: "C" }) }).catch(() => {
+      });
+      const result = await safeClick(openButton);
+      console.warn("[OPEN_CLICK] clicked", { result, candidateTag: openButton.tagName });
+      fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "navigator.js:clickOpenButton:clicked", message: "OPEN_CLICK clicked", data: { result, candidateTag: openButton.tagName }, timestamp: Date.now(), hypothesisId: "D" }) }).catch(() => {
+      });
+      return result;
     }
     /**
      * '계속' 버튼 찾기 및 클릭 (Reading and Writing 섹션)
@@ -11563,13 +12105,85 @@
      * @returns {Promise<boolean>} 성공 여부
      */
     async handleInitialNavigation() {
-      console.log("[SAT-DEBUG] \uD604\uC7AC \uB2E8\uACC4: \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2DC\uC791");
       try {
-        if (isQuestionScreen() || getProgressState() !== null) {
-          console.log("[SAT-DEBUG] \uC774\uBBF8 \uBB38\uC81C \uD654\uBA74\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
+        const w = typeof window !== "undefined" ? window : null;
+        const topConsole = w?.top?.console;
+        if (topConsole && topConsole.warn) {
+          topConsole.warn("[NAV_INIT] \u2605 handleInitialNavigation \uD638\uCD9C\uB428 (\uC774 \uD504\uB808\uC784)", w?.location?.href || "", "isTop=", w === w?.top);
+        }
+      } catch (_) {
+      }
+      const progress = getProgressState();
+      const isQuestion = isQuestionScreen();
+      const problemNum = getCurrentProblemNumber();
+      const isModuleStart = isModuleStartScreen();
+      const satRoot2 = findSatRoot();
+      const hasNextInSatRoot = satRoot2 ? !!satRoot2.querySelector('[data-testid="next-button"]') : false;
+      const progressMatch = progress && progress.match(/\s*(\d+)\s*\/\s*(\d+)\s*/);
+      const progressNum = progressMatch ? parseInt(progressMatch[1], 10) : null;
+      const hasChoices = !!(document.querySelector('[role="radio"]') || document.querySelector('button[aria-label*="Choice"]') || document.querySelector('[class*="option"]'));
+      const allState = {
+        href: typeof location !== "undefined" ? location.href : "",
+        isTop: typeof window !== "undefined" && window === window.top,
+        isQuestion,
+        progress,
+        problemNum,
+        isModuleStart,
+        hasNextInSatRoot,
+        progressNum,
+        hasChoices,
+        stack: (new Error().stack || "").split("\n").slice(2).join("\n")
+      };
+      fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "navigator.js:handleInitialNavigation:entry", message: "NAV_INIT entry", data: allState, timestamp: Date.now(), hypothesisId: "A" }) }).catch(() => {
+      });
+      console.warn("[NAV_INIT] handleInitialNavigation entry", allState);
+      try {
+        if (window?.top?.console?.warn) {
+          window.top.console.warn("[NAV_INIT] handleInitialNavigation entry (top\uC5D0 \uD45C\uC2DC)", allState);
+        }
+      } catch (_) {
+      }
+      try {
+        if (isQuestion) {
+          console.warn("[NAV_INIT] skip_open_click_because_already_in_question", { reason: "isQuestionScreen", progress, problemNum });
+          try {
+            window?.top?.console?.warn?.("[NAV_INIT] skip (isQuestionScreen)", { progress, problemNum });
+          } catch (_) {
+          }
           return true;
         }
-        console.log("[SAT-DEBUG] \uD604\uC7AC \uB2E8\uACC4: 1\uB2E8\uACC4 - \uC5F4\uAE30 \uBC84\uD2BC \uD074\uB9AD");
+        if (progress != null && progressNum >= 1 && hasChoices) {
+          console.warn("[NAV_INIT] skip_open_click_because_already_in_question", { reason: "progress_and_choices", progress, progressNum, hasChoices });
+          try {
+            window?.top?.console?.warn?.("[NAV_INIT] skip (progress_and_choices)", { progress });
+          } catch (_) {
+          }
+          return true;
+        }
+        if (hasNextInSatRoot) {
+          console.warn("[NAV_INIT] skip_open_click_because_already_in_question", { reason: "next_button_in_sat_root", progress });
+          try {
+            window?.top?.console?.warn?.("[NAV_INIT] skip (next_in_sat_root)", { progress });
+          } catch (_) {
+          }
+          return true;
+        }
+        if (progress !== null) {
+          console.warn("[NAV_INIT] skip (progress !== null)");
+          try {
+            window?.top?.console?.warn?.("[NAV_INIT] skip (progress not null)");
+          } catch (_) {
+          }
+          return true;
+        }
+        const step1State = { ...allState, step: "step1_open_click" };
+        fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "navigator.js:handleInitialNavigation:step1_enter", message: "NAV_INIT step1_enter", data: step1State, timestamp: Date.now(), hypothesisId: "B" }) }).catch(() => {
+        });
+        console.warn("[NAV_INIT] step1_enter", step1State);
+        try {
+          window?.top?.console?.warn?.("[NAV_INIT] \u2605 step1_enter - \uC5F4\uAE30 \uBC84\uD2BC \uD074\uB9AD \uB2E8\uACC4 \uC9C4\uC785", step1State);
+        } catch (_) {
+        }
         showToast("\uC5F4\uAE30 \uBC84\uD2BC \uD074\uB9AD \uC911...", "info");
         const openClicked = await this.clickOpenButton();
         if (openClicked) {
@@ -11618,18 +12232,18 @@
           let problemScreenReady = false;
           while (Date.now() - startTime < maxWait && !problemScreenReady) {
             await new Promise((resolve) => setTimeout(resolve, 250));
-            const progress = getProgressState();
-            const isQuestion = isQuestionScreen();
-            if (progress && progress.match(/\d+\s*\/\s*\d+/)) {
+            const progress2 = getProgressState();
+            const isQuestion2 = isQuestionScreen();
+            if (progress2 && progress2.match(/\d+\s*\/\s*\d+/)) {
               problemScreenReady = true;
-              console.log("[SAT-DEBUG] \uBB38\uC81C \uD654\uBA74 \uD655\uC778\uB428 (Progress):", progress);
+              console.log("[SAT-DEBUG] \uBB38\uC81C \uD654\uBA74 \uD655\uC778\uB428 (Progress):", progress2);
               break;
             }
-            if (isQuestion) {
-              const problemNum = getCurrentProblemNumber();
-              if (problemNum > 0) {
+            if (isQuestion2) {
+              const problemNum2 = getCurrentProblemNumber();
+              if (problemNum2 > 0) {
                 problemScreenReady = true;
-                console.log("[SAT-DEBUG] \uBB38\uC81C \uD654\uBA74 \uD655\uC778\uB428 (\uBB38\uC81C \uBC88\uD638):", problemNum);
+                console.log("[SAT-DEBUG] \uBB38\uC81C \uD654\uBA74 \uD655\uC778\uB428 (\uBB38\uC81C \uBC88\uD638):", problemNum2);
                 break;
               }
             }
@@ -11677,7 +12291,7 @@
                 if (startText.includes("\uC2DC\uC791") || startText === "start" || startText.includes("start")) {
                   console.log("[SAT PDF Exporter] Math \uC139\uC158 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD");
                   startBtn.click();
-                  await waitForContentLoad(800);
+                  await waitForContentLoad(300);
                   return true;
                 }
               }
@@ -11687,7 +12301,7 @@
       }
       const originalScroll = window.scrollY;
       window.scrollTo(0, document.body.scrollHeight);
-      await waitForContentLoad(600);
+      await waitForContentLoad(200);
       const scrolledMathButtons = document.querySelectorAll('button, a, [role="button"]');
       for (const button of scrolledMathButtons) {
         const text = (button.innerText || button.textContent || "").trim().toLowerCase();
@@ -11697,7 +12311,7 @@
           if ((parentText.includes("math") || parentText.includes("\uC218\uD559")) && (text.includes("\uC2DC\uC791") || text === "start")) {
             console.log("[SAT PDF Exporter] Math \uC139\uC158 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD (\uC2A4\uD06C\uB864 \uD6C4)");
             button.click();
-            await waitForContentLoad(800);
+            await waitForContentLoad(300);
             return true;
           }
         }
@@ -11741,43 +12355,115 @@
     if (!toggleFound) {
       console.warn("[SAT PDF Exporter] \uAC01 \uB2F5\uBCC0 \uB2E4\uC74C\uC5D0 \uC815\uB2F5 \uD45C\uC2DC \uD1A0\uAE00\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
     }
-    const startTestButton = findButtonByText("\uD14C\uC2A4\uD2B8 \uC2DC\uC791", "Start Test", "\uC2DC\uC791", "Start");
-    if (startTestButton) {
-      console.log("[SAT PDF Exporter] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD");
-      startTestButton.click();
-      await waitForContentLoad(800);
-      return true;
-    } else {
-      console.warn("[SAT PDF Exporter] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-      return false;
+    const START_TEST_LABELS = /테스트\s*시작|start\s*test/i;
+    let startTestButton = null;
+    const touchTargets = deepQuerySelectorAll("span.mat-mdc-button-touch-target");
+    for (const span of touchTargets) {
+      const btn = span.closest("button");
+      if (!btn || btn.disabled || !isElementVisible(btn)) continue;
+      const labelEl = btn.querySelector(".mdc-button__label");
+      const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || "").trim();
+      if (START_TEST_LABELS.test(btnText)) {
+        startTestButton = btn;
+        console.log("[SAT PDF Exporter] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uBC1C\uACAC (mat-mdc-button-touch-target)");
+        break;
+      }
     }
+    if (!startTestButton) {
+      startTestButton = findButtonByText("\uD14C\uC2A4\uD2B8 \uC2DC\uC791", "Start Test", "Start test");
+    }
+    if (!startTestButton) {
+      const setupRoot = Array.from(document.querySelectorAll('activity-set, [class*="immersive"], [class*="card"], [class*="section"]')).find((el) => {
+        const t = (el.innerText || el.textContent || "").toLowerCase();
+        return t.includes("reading") && t.includes("writing") || t.includes("\uD14C\uC2A4\uD2B8 \uC2DC\uC791") || t.includes("start test");
+      });
+      if (setupRoot) {
+        startTestButton = findButtonByTextInRoot(setupRoot, "\uD14C\uC2A4\uD2B8 \uC2DC\uC791", "Start Test", "Start test");
+        if (!startTestButton) {
+          const btns = deepQuerySelectorAll("button", setupRoot);
+          startTestButton = btns.find((b) => !b.disabled && isElementVisible(b) && START_TEST_LABELS.test(b.innerText || b.textContent || "")) || null;
+        }
+      }
+    }
+    if (startTestButton) {
+      console.log("[SAT PDF Exporter] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC2DC\uB3C4");
+      startTestButton.scrollIntoView({ behavior: "smooth", block: "center" });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      let clicked2 = await safeClick(startTestButton);
+      if (!clicked2) {
+        console.log("[SAT PDF Exporter] safeClick \uC2E4\uD328, forceClick \uC2DC\uB3C4");
+        clicked2 = await forceClick(startTestButton);
+      }
+      if (clicked2) {
+        await waitForContentLoad(300);
+        return true;
+      }
+    }
+    console.warn("[SAT PDF Exporter] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC\uC744 \uCC3E\uAC70\uB098 \uD074\uB9AD\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+    return false;
   }
   async function clickSectionContinue(sectionName) {
-    console.log(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uACC4\uC18D \uBC84\uD2BC \uCC3E\uB294 \uC911...`);
+    console.log(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uACC4\uC18D/\uC2DC\uC791 \uBC84\uD2BC \uCC3E\uB294 \uC911...`);
+    if (sectionName.toLowerCase() === "math") {
+      const touchTargets = deepQuerySelectorAll("span.mat-mdc-button-touch-target");
+      for (const span of touchTargets) {
+        const btn = span.closest("button");
+        if (!btn || btn.disabled || !isElementVisible(btn)) continue;
+        const labelEl = btn.querySelector(".mdc-button__label");
+        const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || "").trim().toLowerCase();
+        let ancestor = btn.parentElement;
+        let inMathContext = false;
+        for (let i = 0; i < 12 && ancestor; i++) {
+          const t = (ancestor.innerText || ancestor.textContent || "").toLowerCase();
+          if (t.includes("math") || t.includes("\uC218\uD559")) {
+            inMathContext = true;
+            break;
+          }
+          ancestor = ancestor.parentElement;
+        }
+        if ((btnText.includes("\uC2DC\uC791") || btnText === "start") && inMathContext) {
+          console.log(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uC2DC\uC791 \uBC84\uD2BC \uBC1C\uACAC (mat-mdc-button-touch-target)`);
+          btn.scrollIntoView({ behavior: "smooth", block: "center" });
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          let clicked2 = await safeClick(btn);
+          if (!clicked2) clicked2 = await forceClick(btn);
+          if (clicked2) {
+            await waitForContentLoad(300);
+            return true;
+          }
+        }
+      }
+    }
     const sectionCards = document.querySelectorAll('[class*="card"], [class*="section"]');
     for (const card of sectionCards) {
       const cardText = (card.innerText || card.textContent || "").toLowerCase();
       if (cardText.includes(sectionName.toLowerCase())) {
         const continueButton2 = card.querySelector("button");
-        if (continueButton2) {
+        if (continueButton2 && !continueButton2.disabled && isElementVisible(continueButton2)) {
           const buttonText = (continueButton2.innerText || continueButton2.textContent || "").trim();
-          if (buttonText.includes("\uACC4\uC18D") || buttonText.includes("Continue") || buttonText.includes("Start")) {
-            console.log(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uACC4\uC18D \uBC84\uD2BC \uD074\uB9AD`);
-            continueButton2.click();
-            await waitForContentLoad(800);
-            return true;
+          if (buttonText.includes("\uACC4\uC18D") || buttonText.includes("Continue") || buttonText.includes("Start") || buttonText.includes("\uC2DC\uC791")) {
+            console.log(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uBC84\uD2BC \uD074\uB9AD`);
+            let clicked2 = await safeClick(continueButton2);
+            if (!clicked2) clicked2 = await forceClick(continueButton2);
+            if (clicked2) {
+              await waitForContentLoad(300);
+              return true;
+            }
           }
         }
       }
     }
     const continueButton = findButtonByText("\uACC4\uC18D", "Continue", "Start", "\uC2DC\uC791");
     if (continueButton) {
-      console.log(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uACC4\uC18D \uBC84\uD2BC \uD074\uB9AD (\uD3F4\uBC31)`);
-      continueButton.click();
-      await waitForContentLoad(800);
-      return true;
+      console.log(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uBC84\uD2BC \uD074\uB9AD (\uD3F4\uBC31)`);
+      let clicked2 = await safeClick(continueButton);
+      if (!clicked2) clicked2 = await forceClick(continueButton);
+      if (clicked2) {
+        await waitForContentLoad(300);
+        return true;
+      }
     }
-    console.warn(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uACC4\uC18D \uBC84\uD2BC\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.`);
+    console.warn(`[SAT PDF Exporter] ${sectionName} \uC139\uC158 \uACC4\uC18D/\uC2DC\uC791 \uBC84\uD2BC\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.`);
     return false;
   }
   async function startModule2() {
@@ -11821,12 +12507,12 @@
     try {
       btn.scrollIntoView({ behavior: "smooth", block: "center" });
       await new Promise((resolve) => setTimeout(resolve, 150));
-      let clicked = await safeClick(btn);
-      if (!clicked) {
+      let clicked2 = await safeClick(btn);
+      if (!clicked2) {
         console.log("[SAT PDF Exporter] startModule2: safeClick \uC2E4\uD328, forceClick \uC2DC\uB3C4");
-        clicked = await forceClick(btn);
+        clicked2 = await forceClick(btn);
       }
-      if (!clicked) {
+      if (!clicked2) {
         console.warn("[SAT PDF Exporter] startModule2: \uD074\uB9AD \uC2E4\uD328");
         return false;
       }
@@ -11999,8 +12685,8 @@
       try {
         button.scrollIntoView({ behavior: "smooth", block: "center" });
         await new Promise((resolve) => setTimeout(resolve, 150));
-        const clicked = await safeClick(button);
-        if (!clicked) {
+        const clicked2 = await safeClick(button);
+        if (!clicked2) {
           console.log("[SAT PDF Exporter] safeClick \uC2E4\uD328, forceClick \uC2DC\uB3C4...");
           await forceClick(button);
         }
@@ -12009,7 +12695,7 @@
         const afterClickProgress = getProgressState();
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "navigator.js:startNextModule:afterClick", message: "after clicking module 2 start button", data: { afterClickIsQuestion, afterClickProgress }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "D" }) }).catch(() => {
         });
-        await waitForContentLoad(800);
+        await waitForContentLoad(300);
         await new Promise((resolve) => setTimeout(resolve, 250));
         console.log("[SAT PDF Exporter] \uBAA8\uB4C8 2 \uC2DC\uC791 \uC644\uB8CC, \uCCAB \uBB38\uC81C \uD655\uC778 \uC911...");
         const finalIsQuestion = isQuestionScreen();
@@ -12222,12 +12908,27 @@
   // src/flow/moduleRunner.js
   init_deepQuery();
   init_extract();
+  init_deepQuery();
   function currentProblemHasImage() {
     const root = findSatRoot();
     if (!root) return false;
     return !!root.querySelector('img, figure, [class*="figure"], [class*="image"], [data-testid*="figure"], [data-testid*="image"]');
   }
+  function assertFrameAndSAT() {
+    const hasSAT = !!document.querySelector("activity-set") && !!document.querySelector('[data-test-id="next-button"]');
+    if (!hasSAT) {
+      console.warn("[FRAME-GUARD] no SAT dom in this frame, abort", describeDoc(document));
+      const err = new Error("FRAME_GUARD: no SAT DOM in this frame");
+      err.code = "FRAME_GUARD";
+      throw err;
+    }
+  }
   async function collectModuleProblems(allData, sectionType, moduleName) {
+    if (typeof window !== "undefined" && window.top !== window) {
+      console.warn("[FRAME-GUARD] iframe abort", typeof location !== "undefined" ? location.href : "");
+      return 0;
+    }
+    assertFrameAndSAT();
     console.log(`[FLOW] collectModuleProblems start: ${sectionType} ${moduleName}`);
     const moduleNumber = moduleName === "Module 1" ? 1 : 2;
     const targetArray = sectionType === "reading" ? allData.reading : allData.math;
@@ -12258,8 +12959,11 @@
     const maxConsecutiveDuplicates = 3;
     let consecutiveExtractFailures = 0;
     const maxExtractRetries = 5;
+    let consecutiveChoiceFailures = 0;
+    const maxConsecutiveChoiceFailures = 5;
     let lastProgressState = null;
-    while ((TEMP_MODE ? collectedNumbers.size < targetNumbers.size : targetArray.filter((p) => p.module === moduleNumber).length < maxProblems) && (moduleNumber === 2 ? true : consecutiveDuplicates < maxConsecutiveDuplicates)) {
+    const allowDuplicateExit = moduleNumber === 2 || sectionType === "math" ? false : true;
+    while ((TEMP_MODE ? collectedNumbers.size < targetNumbers.size : targetArray.filter((p) => p.module === moduleNumber).length < maxProblems) && (allowDuplicateExit ? consecutiveDuplicates < maxConsecutiveDuplicates : true)) {
       const isQuestion = isQuestionScreen();
       const progressState = getProgressState();
       const bodyText = (document.body.innerText || document.body.textContent || "").substring(0, 200);
@@ -12295,7 +12999,7 @@
           }
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      await new Promise((resolve) => setTimeout(resolve, 25));
       const retryProblemNum = getCurrentProblemNumber();
       if (retryProblemNum > 0 && retryProblemNum !== currentProblemNum) {
         console.log(`[FLOW] \uBB38\uC81C \uBC88\uD638 \uC7AC\uD655\uC778: ${currentProblemNum} \u2192 ${retryProblemNum}`);
@@ -12341,6 +13045,8 @@
       if (seenSignatures.has(signature)) {
         console.warn(`[FLOW] \uC911\uBCF5 \uBB38\uC81C \uAC10\uC9C0: ${signature} (\uBAA8\uB4C8: ${moduleNumber}, \uBB38\uC81C: ${currentProblemNum})`);
         consecutiveDuplicates++;
+        fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:duplicateContinue", message: "duplicate detected, continue (no choice click)", data: { signature, moduleNumber, currentProblemNum }, timestamp: Date.now(), hypothesisId: "H4" }) }).catch(() => {
+        });
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:duplicateDetected", message: "duplicate problem detected, incrementing consecutiveDuplicates", data: { signature, moduleNumber, currentProblemNum, consecutiveDuplicates, maxConsecutiveDuplicates, reason: "signature already seen", beforeProgressState, lastProgressState }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "J" }) }).catch(() => {
         });
         if (moduleNumber === 2) {
@@ -12357,10 +13063,14 @@
           }
         }
         if (consecutiveDuplicates >= maxConsecutiveDuplicates) {
-          console.warn(`[FLOW] \uC5F0\uC18D \uC911\uBCF5 ${maxConsecutiveDuplicates}\uD68C. \uC218\uC9D1 \uC885\uB8CC.`);
-          fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:breakConsecutiveDuplicates", message: "BREAK: consecutive duplicates exceeded", data: { reason: "consecutiveDuplicatesExceeded", currentProblemNum, moduleProblemsCount: targetArray.filter((p) => p.module === moduleNumber).length, consecutiveDuplicates, maxConsecutiveDuplicates, progressState: getProgressState(), isQuestion: isQuestionScreen(), signature, moduleNumber, lastProgressState }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "J" }) }).catch(() => {
-          });
-          break;
+          if (allowDuplicateExit) {
+            console.warn(`[FLOW] \uC5F0\uC18D \uC911\uBCF5 ${maxConsecutiveDuplicates}\uD68C. \uC218\uC9D1 \uC885\uB8CC.`);
+            fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:breakConsecutiveDuplicates", message: "BREAK: consecutive duplicates exceeded", data: { reason: "consecutiveDuplicatesExceeded", currentProblemNum, moduleProblemsCount: targetArray.filter((p) => p.module === moduleNumber).length, consecutiveDuplicates, maxConsecutiveDuplicates, progressState: getProgressState(), isQuestion: isQuestionScreen(), signature, moduleNumber, lastProgressState }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "J" }) }).catch(() => {
+            });
+            break;
+          } else {
+            console.log(`[FLOW] Math/Module2: \uC5F0\uC18D \uC911\uBCF5 ${consecutiveDuplicates}\uD68C\uC774\uC9C0\uB9CC maxProblems(${maxProblems})\uAE4C\uC9C0 \uC218\uC9D1 \uACC4\uC18D.`);
+          }
         }
       } else {
         consecutiveDuplicates = 0;
@@ -12379,10 +13089,10 @@
         await waitForContentLoad(CONFIG.timeouts.screenTransition);
         continue;
       }
-      const alreadyGraded = isGraded();
+      const skipChoiceBecauseGraded = false;
       const isLastProblem = currentProblemNum === maxProblems;
       let problem = null;
-      if (isLastProblem && !alreadyGraded) {
+      if (isLastProblem) {
         console.log(`[FLOW] 27\uBC88 \uBB38\uC81C \uAC10\uC9C0: \uC81C\uCD9C \uC804\uC5D0 \uBB38\uC81C \uCD94\uCD9C \uC911...`);
         const beforeExtractProblemNum = getCurrentProblemNumber();
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:extract27BeforeSubmit", message: "extracting problem 27 before submit", data: { currentProblemNum, maxProblems, beforeExtractProblemNum }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "I" }) }).catch(() => {
@@ -12398,75 +13108,168 @@
       }
       let correctAnswer = null;
       let explanation = "";
-      if (!alreadyGraded) {
+      let choiceClickedThisProblem = false;
+      if (!skipChoiceBecauseGraded) {
+        console.log("[CTX]", {
+          isTop: window.top === window,
+          href: location.href,
+          hasActivitySet: !!document.querySelector("activity-set"),
+          choices: document.querySelectorAll("mat-action-list.choices-container button").length
+        });
         const hasImage = currentProblemHasImage();
         const beforeMs = hasImage ? CONFIG.timeouts.beforeChoiceClickWithImage : CONFIG.timeouts.beforeChoiceClick;
-        console.log(`[FLOW] \uC120\uC9C0 \uD074\uB9AD \uC804 \uB300\uAE30 ${beforeMs}ms${hasImage ? " (\uC774\uBBF8\uC9C0 \uC788\uC74C)" : ""}...`);
         await new Promise((resolve) => setTimeout(resolve, beforeMs));
-        const maxChoiceClickRetries = 3;
-        const choiceRetryDelayMs = 400;
-        let clicked = await clickFirstChoice(sectionType);
-        if (!clicked) {
-          for (let retry = 1; retry <= maxChoiceClickRetries; retry++) {
-            console.log(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC2E4\uD328. \uC7AC\uC2DC\uB3C4 ${retry}/${maxChoiceClickRetries} (${choiceRetryDelayMs}ms \uD6C4)...`);
-            await new Promise((resolve) => setTimeout(resolve, choiceRetryDelayMs));
-            clicked = await clickFirstChoice(sectionType);
-            if (clicked) break;
+        let rootRef2 = getSatRootForChoices();
+        const shortAnswerInput = rootRef2?.querySelector('textarea[data-test-id="short-answer-text"], textarea[placeholder*="\uC5EC\uAE30\uC5D0 \uC785\uB825"], textarea[placeholder*="Enter here"]') || document.querySelector('textarea[data-test-id="short-answer-text"], textarea[placeholder*="\uC5EC\uAE30\uC5D0 \uC785\uB825"], textarea[placeholder*="Enter here"]');
+        if (sectionType === "math" && shortAnswerInput && !shortAnswerInput.disabled) {
+          console.log(`[FLOW] Math \uB2E8\uB2F5\uC2DD \uAC10\uC9C0 - textarea \uC785\uB825 + \uC815\uB2F5\uD655\uC778 \uD074\uB9AD`);
+          shortAnswerInput.focus();
+          await new Promise((r) => setTimeout(r, 30));
+          shortAnswerInput.value = "1";
+          shortAnswerInput.dispatchEvent(new Event("input", { bubbles: true }));
+          shortAnswerInput.dispatchEvent(new Event("change", { bubbles: true }));
+          await new Promise((r) => setTimeout(r, 30));
+          const checkAnswerBtns = deepQuerySelectorAll("span.mat-mdc-button-touch-target");
+          for (const span of checkAnswerBtns) {
+            const btn = span.closest("button");
+            if (!btn || btn.disabled) continue;
+            const labelEl = btn.querySelector(".mdc-button__label");
+            const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || "").trim();
+            if (/정답\s*확인|check\s*answer/i.test(btnText)) {
+              let clicked2 = await safeClick(btn);
+              if (!clicked2) clicked2 = await forceClick(btn);
+              if (clicked2) {
+                choiceClickedThisProblem = true;
+                console.log("[FLOW] \u2713 Math \uB2E8\uB2F5\uC2DD \uC815\uB2F5\uD655\uC778 \uD074\uB9AD \uC131\uACF5");
+                await new Promise((r) => setTimeout(r, 120));
+              }
+              break;
+            }
           }
         }
-        if (!clicked) {
-          console.warn(`[FLOW] \uC120\uD0DD\uC9C0 \uD074\uB9AD \uCD5C\uC885 \uC2E4\uD328. \uC81C\uCD9C\uD558\uC9C0 \uC54A\uACE0 \uAC19\uC740 \uBB38\uC81C \uB2E4\uC2DC \uC2DC\uB3C4\uD569\uB2C8\uB2E4.`);
-          await new Promise((resolve) => setTimeout(resolve, 1e3));
-          continue;
+        if (!choiceClickedThisProblem) {
+          console.log(`[FLOW-CHOICE] \uBB38\uC81C ${currentProblemNum} \uC120\uC9C0 \uD074\uB9AD \uC2DC\uB3C4 \uC2DC\uC791`);
+          await ensureChoicesVisible({ root: rootRef2, maxScrollAttempts: 16, problemNumber: currentProblemNum });
+          await new Promise((r) => setTimeout(r, 25));
+          let choices = extractChoices(rootRef2);
+          const maxBlockRetries = 2;
+          let blockAttempt = 0;
+          let clicked2 = false;
+          while (blockAttempt <= maxBlockRetries) {
+            try {
+              const firstEl = choices[0] && choices[0].element;
+              const beforeClass = firstEl ? firstEl.className : "";
+              clicked2 = await clickFirstChoice(sectionType, rootRef2);
+              await new Promise((r) => setTimeout(r, 25));
+              const afterClass = firstEl ? firstEl.className : "";
+              const verified = afterClass !== beforeClass || /answered|selected|revealed/.test(afterClass || "");
+              if (!verified && firstEl) {
+                const failErr = new Error("CHOICE_CLICK_FAILED");
+                failErr.code = "CHOICE_CLICK_FAILED";
+                throw failErr;
+              }
+              consecutiveChoiceFailures = 0;
+              choiceClickedThisProblem = true;
+              console.log("[FLOW] \u2713 \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC131\uACF5");
+              break;
+            } catch (err) {
+              if (err?.code === "CHOICE_CLICK_FAILED" || err?.code === "CHOICE_VERIFY_FAILED" || err?.code === "NO_CHOICES_EXTRACTED" || err?.code === "CHOICES_NOT_FOUND") {
+                blockAttempt++;
+                if (blockAttempt > maxBlockRetries) throw err;
+                await new Promise((r) => setTimeout(r, 40));
+                rootRef2 = getSatRootForChoices();
+                await ensureChoicesVisible({ root: rootRef2, maxScrollAttempts: 16, problemNumber: currentProblemNum });
+                await new Promise((r) => setTimeout(r, 25));
+                choices = extractChoices(rootRef2);
+                continue;
+              }
+              throw err;
+            }
+          }
+          if (!clicked2) {
+            consecutiveChoiceFailures++;
+            const choiceFailErr = new Error(`[CHOICE] \uBB38\uC81C ${currentProblemNum} \uC120\uC9C0 \uC120\uD0DD \uC2E4\uD328 (\uC5F0\uC18D ${consecutiveChoiceFailures}/${maxConsecutiveChoiceFailures})`);
+            choiceFailErr.code = "CHOICE_VERIFY_FAILED";
+            choiceFailErr.problemNumber = currentProblemNum;
+            throw choiceFailErr;
+          }
         }
-        console.log(`[FLOW] \u2713 \uC120\uD0DD\uC9C0 \uD074\uB9AD \uC131\uACF5`);
         const afterMs = hasImage ? CONFIG.timeouts.afterChoiceClickWithImage : CONFIG.timeouts.afterChoiceClick;
         console.log(`[FLOW] \uC120\uC9C0 \uD074\uB9AD \uD6C4 \uC81C\uCD9C \uC804 \uB300\uAE30 ${afterMs}ms${hasImage ? " (\uC774\uBBF8\uC9C0 \uC788\uC74C)" : ""}...`);
         await new Promise((resolve) => setTimeout(resolve, afterMs));
-        if (isLastProblem && clicked) {
-          console.log(`[FLOW] 27\uBC88: \uC81C\uCD9C \uC804\uC5D0 \uC815\uB2F5 \uCD94\uCD9C (\uD654\uBA74 \uC804\uD658 \uC804)...`);
-          await new Promise((resolve) => setTimeout(resolve, 120));
-          correctAnswer = detectCorrectAnswer();
-          explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
-          if (correctAnswer) {
-            console.log(`[FLOW] \u2713 27\uBC88 \uBB38\uC81C \uC815\uB2F5 \uCD94\uCD9C \uC131\uACF5 (\uC81C\uCD9C \uC804): ${correctAnswer}`);
-          }
-        }
-        console.log(`[FLOW] \uC81C\uCD9C \uBC84\uD2BC \uD074\uB9AD \uC911...`);
-        const onAfterConfirm = isLastProblem ? async () => {
-          console.log("[FLOW] 27\uBC88: \uD655\uC778 \uD074\uB9AD \uC9C1\uD6C4 \uC815\uB2F5 \uD3F4\uB9C1 \uC2DC\uC791...");
-          const deadline = Date.now() + 3e3;
-          while (Date.now() < deadline && !correctAnswer) {
-            const polled = detectCorrectAnswer();
-            if (polled) {
-              correctAnswer = polled;
-              explanation = extractExplanationAfterGrading(polled, currentProblemNum) || "";
-              console.log(`[FLOW] 27\uBC88: \uD655\uC778 \uC9C1\uD6C4 \uC815\uB2F5 \uD655\uBCF4 \u2192 ${polled}`);
-              fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:lastProblemOnConfirm", message: "27 answer captured in onAfterConfirm", data: { currentProblemNum, polled }, timestamp: Date.now(), runId: "run1", hypothesisId: "K" }) }).catch(() => {
-              });
-              break;
+        const autoGraded = await new Promise((resolve) => {
+          const deadline = Date.now() + 600;
+          const check = () => {
+            if (Date.now() >= deadline) {
+              resolve(false);
+              return;
             }
-            await new Promise((resolve) => setTimeout(resolve, 50));
-          }
-        } : void 0;
-        const submitted = await clickSubmitWithConfirmation(onAfterConfirm);
-        if (!submitted) {
-          console.warn(`[FLOW] \uC81C\uCD9C \uC2E4\uD328. \uB2E4\uC74C \uBB38\uC81C\uB85C \uC774\uB3D9 \uC2DC\uB3C4.`);
+            const root = findSatRoot();
+            if (!root) {
+              setTimeout(check, 25);
+              return;
+            }
+            const has = root.querySelector('[class*="answered-correct"], [class*="answered-incorrect"], [aria-label*="Correct" i], [aria-label*="Incorrect" i], [class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]');
+            if (has) {
+              resolve(true);
+              return;
+            }
+            setTimeout(check, 25);
+          };
+          check();
+        });
+        if (autoGraded) {
+          console.log(`[FLOW] \uC790\uB3D9 \uCC44\uC810 \uAC10\uC9C0 \u2192 \uC81C\uCD9C \uB2E8\uACC4 \uC2A4\uD0B5`);
         } else {
-          console.log(`[FLOW] \u2713 \uC81C\uCD9C \uC131\uACF5`);
+          if (isLastProblem && clicked) {
+            console.log(`[FLOW] 27\uBC88: \uC81C\uCD9C \uC804\uC5D0 \uC815\uB2F5 \uCD94\uCD9C (\uD654\uBA74 \uC804\uD658 \uC804)...`);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            correctAnswer = detectCorrectAnswer();
+            explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
+            if (correctAnswer) {
+              console.log(`[FLOW] \u2713 27\uBC88 \uBB38\uC81C \uC815\uB2F5 \uCD94\uCD9C \uC131\uACF5 (\uC81C\uCD9C \uC804): ${correctAnswer}`);
+            }
+          }
+          console.log(`[FLOW] \uC81C\uCD9C \uBC84\uD2BC \uD074\uB9AD \uC2DC\uB3C4...`);
+          const onAfterConfirm = isLastProblem ? async () => {
+            console.log("[FLOW] 27\uBC88: \uD655\uC778 \uD074\uB9AD \uC9C1\uD6C4 \uC815\uB2F5 \uD3F4\uB9C1 \uC2DC\uC791...");
+            const deadline = Date.now() + 700;
+            while (Date.now() < deadline && !correctAnswer) {
+              const polled = detectCorrectAnswer();
+              if (polled) {
+                correctAnswer = polled;
+                explanation = extractExplanationAfterGrading(polled, currentProblemNum) || "";
+                console.log(`[FLOW] 27\uBC88: \uD655\uC778 \uC9C1\uD6C4 \uC815\uB2F5 \uD655\uBCF4 \u2192 ${polled}`);
+                break;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+          } : void 0;
+          const submitted = await clickSubmitWithConfirmation(onAfterConfirm);
+          if (!submitted) {
+            console.warn(`[FLOW] \uC81C\uCD9C \uBC84\uD2BC \uC5C6\uC74C(\uC790\uB3D9 \uCC44\uC810 \uAC00\uB2A5). \uCC44\uC810 \uB300\uAE30\uB85C \uC9C4\uD589.`);
+          } else {
+            console.log(`[FLOW] \u2713 \uC81C\uCD9C \uC131\uACF5`);
+          }
         }
         console.log(`[FLOW] \uCC44\uC810 \uB300\uAE30 \uC911...`);
         let gradingResult = !!correctAnswer;
         if (!gradingResult) {
           gradingResult = await waitForGrading(1500);
         }
+        (function() {
+          const satRoot2 = findSatRoot();
+          const hasExplanationDom = satRoot2 ? !!satRoot2.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]') : false;
+          fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:afterGradingCheck", message: "after waitForGrading", data: { gradingResult, currentProblemNum, hasExplanationDom }, timestamp: Date.now(), hypothesisId: "H2" }) }).catch(() => {
+          });
+        })();
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:afterGrading", message: "after grading wait", data: { gradingResult, isLastProblem, currentProblemNum }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "I" }) }).catch(() => {
         });
         if (!gradingResult) {
           console.warn(`[FLOW] \uCC44\uC810 \uC644\uB8CC \uB300\uAE30 \uC2E4\uD328. \uB2E4\uC74C \uBB38\uC81C\uB85C \uC774\uB3D9 \uC2DC\uB3C4.`);
           if (isLastProblem) {
             console.log(`[FLOW] 27\uBC88 \uBB38\uC81C: \uCC44\uC810 \uB300\uAE30 \uC2E4\uD328\uD588\uC9C0\uB9CC \uC815\uB2F5 \uCD94\uCD9C \uC2DC\uB3C4...`);
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, 25));
             correctAnswer = detectCorrectAnswer();
             explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
             if (correctAnswer) {
@@ -12476,24 +13279,45 @@
         } else {
           console.log(`[FLOW] \u2713 \uCC44\uC810 \uC644\uB8CC`);
           console.log(`[FLOW] \uC815\uB2F5 \uD45C\uC2DC DOM \uBC18\uC601 \uB300\uAE30 \uC911...`);
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          const explanationWaitDeadline = Date.now() + 2e3;
+          while (Date.now() < explanationWaitDeadline) {
+            const root = findSatRoot();
+            if (root && root.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]')) {
+              console.log(`[FLOW] \u2713 \uD574\uC124 DOM \uD655\uC778 (${Date.now() - (explanationWaitDeadline - 2e3)}ms \uB300\uAE30)`);
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 40));
+          }
           let retryCount = 0;
           let answerMarkingFound = false;
           while (retryCount < 5) {
-            const satRoot = findSatRoot();
-            if (satRoot) {
-              const hasAnswerMarking = satRoot.querySelector('[class*="answered-correct"], [class*="answered-incorrect"], [aria-label*="Correct" i], [aria-label*="Incorrect" i]');
+            const satRoot2 = findSatRoot();
+            if (satRoot2) {
+              const hasAnswerMarking = satRoot2.querySelector('[class*="answered-correct"], [class*="answered-incorrect"], [aria-label*="Correct" i], [aria-label*="Incorrect" i]');
               if (hasAnswerMarking) {
                 console.log(`[FLOW] \u2713 \uC815\uB2F5 \uD45C\uC2DC \uD655\uC778\uB428 (\uC7AC\uC2DC\uB3C4 ${retryCount + 1}/5)`);
                 answerMarkingFound = true;
                 break;
               }
             }
-            await new Promise((resolve) => setTimeout(resolve, 120));
+            await new Promise((resolve) => setTimeout(resolve, 25));
             retryCount++;
+          }
+          if (!answerMarkingFound) {
+            const satRoot2 = findSatRoot();
+            const hasExplanationDom = satRoot2 ? !!satRoot2.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]') : false;
+            fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:answerMarkingNotFound", message: "answerMarkingFound false after 5 retries", data: { currentProblemNum, hasExplanationDom, gradingResult: true }, timestamp: Date.now(), hypothesisId: "H2" }) }).catch(() => {
+            });
           }
           if (answerMarkingFound) {
             console.log(`[FLOW] \uC815\uB2F5 \uCD94\uCD9C \uC2DC\uB3C4 \uC911 (\uCC44\uC810 \uC9C1\uD6C4)...`);
+            (function() {
+              const satRoot2 = findSatRoot();
+              const hasExplanationDom = satRoot2 ? !!satRoot2.querySelector('[class*="explanation"], [class*="\uD574\uC124"], [class*="solution"]') : false;
+              fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:beforeExtractAnswer", message: "before extract answer (answerMarkingFound=true)", data: { currentProblemNum, hasExplanationDom }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {
+              });
+            })();
             const beforeExtractProblemNum = getCurrentProblemNumber();
             fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:beforeExtract", message: "before extracting answer and explanation", data: { currentProblemNum, beforeExtractProblemNum }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
             });
@@ -12507,7 +13331,7 @@
               console.log(`[FLOW] \u2713 \uC815\uB2F5 \uCD94\uCD9C \uC131\uACF5: ${correctAnswer}`);
             } else {
               console.warn(`[FLOW] \u2717 \uC815\uB2F5 \uCD94\uCD9C \uC2E4\uD328 (\uCC44\uC810 \uC9C1\uD6C4 \uC2DC\uB3C4)`);
-              await new Promise((resolve) => setTimeout(resolve, 120));
+              await new Promise((resolve) => setTimeout(resolve, 25));
               const retryProblemNum2 = getCurrentProblemNumber();
               fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:retryExtract", message: "retrying answer extraction", data: { currentProblemNum, retryProblemNum: retryProblemNum2 }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
               });
@@ -12524,7 +13348,15 @@
           }
         }
       } else {
-        console.log(`[FLOW] \uC774\uBBF8 \uCC44\uC810\uB41C \uC0C1\uD0DC\uC785\uB2C8\uB2E4.`);
+        console.log(`[FLOW] \uC774\uBBF8 \uCC44\uC810\uB41C \uC0C1\uD0DC\uC785\uB2C8\uB2E4 (\uD574\uC124 DOM \uC788\uC74C).`);
+        fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:skipChoicePath", message: "skipping choice click (alreadyGraded && hasExplanation)", data: { currentProblemNum }, timestamp: Date.now(), hypothesisId: "H1" }) }).catch(() => {
+        });
+        const rootGraded = getSatRootForChoices();
+        await ensureChoicesVisible({ root: rootGraded, maxScrollAttempts: 16, problemNumber: currentProblemNum });
+        await new Promise((r) => setTimeout(r, 50));
+        const choicesGraded = extractChoices(rootGraded);
+        console.log(`[FLOW] graded \uBB38\uC81C ${currentProblemNum} choices ${choicesGraded.length}\uAC1C \uD655\uC778 \uD6C4 \uC815\uB2F5 \uCD94\uCD9C \uC9C4\uD589`);
+        choiceClickedThisProblem = true;
         correctAnswer = detectCorrectAnswer();
         const beforeAlreadyGradedExplanationProblemNum = getCurrentProblemNumber();
         explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
@@ -12532,9 +13364,9 @@
         });
         if (!correctAnswer && moduleNumber === 2 && currentProblemNum === 1) {
           console.log(`[FLOW] \uBAA8\uB4C8 2 \uBB38\uC81C 1: \uC774\uBBF8 \uCC44\uC810 \uD310\uBCC4\uD588\uC73C\uB098 \uC815\uB2F5 \uC5C6\uC74C. \uC120\uD0DD\uC9C0 \uD074\uB9AD \uACBD\uB85C \uC7AC\uC2DC\uB3C4...`);
-          const retryClicked = await clickFirstChoice(sectionType);
+          const retryClicked = await clickFirstChoice(sectionType, rootRef);
           if (retryClicked) {
-            await new Promise((resolve) => setTimeout(resolve, 120));
+            await new Promise((resolve) => setTimeout(resolve, 25));
             correctAnswer = detectCorrectAnswer();
             explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
             if (correctAnswer) {
@@ -12545,12 +13377,17 @@
       }
       let problemExtracted = false;
       if (!problem) {
+        if (currentProblemHasImage()) {
+          const figureStabilizeMs = 2500;
+          console.log(`[FLOW] \uC774\uBBF8\uC9C0/\uB3C4\uD45C \uBB38\uC81C: \uADF8\uB9BC \uCEA1\uCC98 \uC804 ${figureStabilizeMs}ms \uB300\uAE30...`);
+          await new Promise((resolve) => setTimeout(resolve, figureStabilizeMs));
+        }
         console.log(`[FLOW] \uBB38\uC81C \uCD94\uCD9C \uC911...`);
         fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:beforeExtractCurrentProblem", message: "math image extract debug: before extract", data: { sectionType, currentProblemNum, isLastProblem }, timestamp: Date.now(), hypothesisId: "H5" }) }).catch(() => {
         });
         problem = await extractCurrentProblem(sectionType);
         if (problem) {
-          await new Promise((resolve) => setTimeout(resolve, 150));
+          await new Promise((resolve) => setTimeout(resolve, 80));
         }
         fetch("http://127.0.0.1:7245/ingest/4830a523-40c3-4932-aa61-ce8aa2b3d853", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:afterExtractCurrentProblem", message: "math image extract debug: after extract", data: { sectionType, currentProblemNum, problemNull: problem === null, figuresLength: problem?.figures?.length ?? "n/a" }, timestamp: Date.now(), hypothesisId: "H1" }) }).catch(() => {
         });
@@ -12558,7 +13395,7 @@
         console.log(`[FLOW] 27\uBC88 \uBB38\uC81C\uB294 \uC774\uBBF8 \uCD94\uCD9C\uD588\uC2B5\uB2C8\uB2E4.`);
         if (isLastProblem && !correctAnswer) {
           console.log(`[FLOW] 27\uBC88 \uBB38\uC81C: \uC815\uB2F5 \uCD94\uCD9C \uC7AC\uC2DC\uB3C4 \uC911...`);
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await new Promise((resolve) => setTimeout(resolve, 25));
           correctAnswer = detectCorrectAnswer();
           explanation = extractExplanationAfterGrading(correctAnswer, currentProblemNum) || "";
           if (correctAnswer) {
@@ -12655,7 +13492,7 @@
           break;
         }
         console.log(`[FLOW] \uCD94\uCD9C \uC7AC\uC2DC\uB3C4 \uB300\uAE30 \uD6C4 \uAC19\uC740 \uBB38\uC81C \uB2E4\uC2DC \uC2DC\uB3C4 (${consecutiveExtractFailures}/${maxExtractRetries})...`);
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        await new Promise((resolve) => setTimeout(resolve, 120));
         continue;
       }
       if (problemExtracted && problem) {
@@ -12702,8 +13539,17 @@
         });
         break;
       }
+      console.log(`[FLOW-CHOICE] \uAC00\uB4DC \uC9C1\uC804: choiceClickedThisProblem=${choiceClickedThisProblem}, currentProblemNum=${currentProblemNum}`);
+      if (!choiceClickedThisProblem) {
+        console.error(`[FLOW-CHOICE] \uCC28\uB2E8: \uC120\uC9C0 \uBBF8\uC120\uD0DD \uC0C1\uD0DC\uC5D0\uC11C \uB2E4\uC74C\uC73C\uB85C \uB118\uC5B4\uAC08 \uC218 \uC5C6\uC74C. \uAC19\uC740 \uBB38\uC81C \uC7AC\uC2DC\uB3C4. (\uBB38\uC81C ${currentProblemNum})`);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
       const problemNumBeforeNext = getCurrentProblemNumber();
+      console.log(`[FLOW-CHOICE] \uB2E4\uC74C \uBC84\uD2BC \uD074\uB9AD \uD5C8\uC6A9 (\uC120\uC9C0 \uC120\uD0DD \uC644\uB8CC). \uBB38\uC81C ${problemNumBeforeNext} \u2192 \uB2E4\uC74C`);
       console.log(`[FLOW] \uB2E4\uC74C \uBB38\uC81C\uB85C \uC774\uB3D9 \uC911... (\uD604\uC7AC: ${problemNumBeforeNext})`);
+      fetch("http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:beforeNextClick", message: "before clicking next button", data: { problemNumBeforeNext, currentProblemNum, explanationLength: explanation ? explanation.length : 0, correctAnswer }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {
+      });
       fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "moduleRunner.js:beforeNext", message: "before moving to next problem", data: { problemNumBeforeNext, currentProblemNum, collectedNumbers: Array.from(collectedNumbers), targetArrayLength: targetArray.length, maxProblems, TEMP_MODE }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "F" }) }).catch(() => {
       });
       let nextAttempts = 0;
@@ -12724,7 +13570,7 @@
           break;
         }
         await waitForContentLoad(CONFIG.timeouts.screenTransition);
-        await new Promise((resolve) => setTimeout(resolve, 120));
+        await new Promise((resolve) => setTimeout(resolve, 25));
         afterProblemNum = getCurrentProblemNumber();
         const afterProgress = getProgressState();
         if (afterProgress) {
@@ -12771,7 +13617,7 @@
                 console.log(`[TEMP] Previous \uBC84\uD2BC \uBC1C\uACAC. ${jumpSize - 1}\uBC88 \uB418\uB3CC\uB9AC\uAE30 \uC2DC\uB3C4...`);
                 for (let i = 0; i < jumpSize - 1; i++) {
                   previousButton.click();
-                  await new Promise((resolve) => setTimeout(resolve, 50));
+                  await new Promise((resolve) => setTimeout(resolve, 25));
                   await waitForContentLoad(CONFIG.timeouts.screenTransition);
                 }
                 const afterBackNum = getCurrentProblemNumber();
@@ -12795,7 +13641,7 @@
           }
         } else if (afterProblemNum <= problemNumBeforeNext) {
           console.warn(`[FLOW] \uBB38\uC81C \uBC88\uD638\uAC00 \uC99D\uAC00\uD558\uC9C0 \uC54A\uC74C: ${problemNumBeforeNext} \u2192 ${afterProblemNum}. \uC7AC\uC2DC\uB3C4...`);
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          await new Promise((resolve) => setTimeout(resolve, 25));
           continue;
         }
       }
@@ -12857,6 +13703,7 @@
 
   // src/flow/scraper.js
   init_extract();
+  init_deepQuery();
   var SATScraper = class {
     constructor() {
       this.navigator = new SATNavigator();
@@ -13016,7 +13863,7 @@
           } else {
             console.warn("[SAT-DEBUG] Module 2 \uC2DC\uC791 \uD654\uBA74\uC774 \uB098\uD0C0\uB098\uC9C0 \uC54A\uC558\uC9C0\uB9CC \uACC4\uC18D \uC9C4\uD589\uD569\uB2C8\uB2E4.");
           }
-          await new Promise((resolve) => setTimeout(resolve, 400));
+          await new Promise((resolve) => setTimeout(resolve, 150));
           fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "scraper.js:afterModule1SubmitWait", message: "after module 1 submit wait", data: { isQuestionScreen: isQuestionScreen(), progressState: getProgressState(), bodyText: (document.body.innerText || "").substring(0, 200), hasModule2Text: (document.body.innerText || "").toLowerCase().includes("\uBAA8\uB4C8 2"), module2ScreenReady: module2ScreenReady2 }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "B" }) }).catch(() => {
           });
         } else {
@@ -13024,7 +13871,7 @@
           fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "scraper.js:module1SubmitFailed", message: "module 1 submit failed", data: { isQuestionScreen: isQuestionScreen(), progressState: getProgressState(), bodyText: (document.body.innerText || "").substring(0, 200) }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
           });
           console.log("[SAT-DEBUG] \uC81C\uCD9C \uBC84\uD2BC\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC9C0\uB9CC Module 2 \uC2DC\uC791 \uD654\uBA74 \uD655\uC778 \uC911...");
-          await new Promise((resolve) => setTimeout(resolve, 350));
+          await new Promise((resolve) => setTimeout(resolve, 150));
           const bodyTextAfterWait = (document.body.innerText || document.body.textContent || "").toLowerCase();
           const hasModule2AfterWait = bodyTextAfterWait.includes("\uBAA8\uB4C8 2") || bodyTextAfterWait.includes("module 2") || bodyTextAfterWait.includes("reading and writing module 2");
           fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "scraper.js:module1SubmitFailedCheck", message: "checking module 2 screen after submit failed", data: { hasModule2AfterWait, bodyTextPreview: bodyTextAfterWait.substring(0, 200) }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "A" }) }).catch(() => {
@@ -13054,7 +13901,7 @@
         if (!module2ScreenReady) {
           console.warn("[SAT-DEBUG] \uBAA8\uB4C8 2 \uC2DC\uC791 \uD654\uBA74\uC774 \uB098\uD0C0\uB098\uC9C0 \uC54A\uC558\uC9C0\uB9CC \uACC4\uC18D \uC9C4\uD589\uD569\uB2C8\uB2E4.");
         }
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 150));
         console.log("[SAT-DEBUG] \uBAA8\uB4C8 2 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC2DC\uB3C4...");
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "scraper.js:beforeStartModule2", message: "before start module 2", data: { module2ScreenReady, isQuestionScreen: isQuestionScreen(), progressState: getProgressState(), bodyText: (document.body.innerText || "").substring(0, 200) }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "D" }) }).catch(() => {
         });
@@ -13165,15 +14012,55 @@
         this.stateManager.setCurrentSection("MATH");
         this.stateManager.setCurrentModule(1);
         showToast("Math \uC139\uC158 \uC2DC\uC791 \uC911...", "info");
-        if (mathStartButton) {
-          console.log("[SATScraper] Math \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD");
-          await safeClick(mathStartButton);
-          await waitForContentLoad(CONFIG.timeouts.screenTransition);
-        } else if (mathSectionButton) {
+        let mathButtonClicked = false;
+        const touchTargets = deepQuerySelectorAll("span.mat-mdc-button-touch-target");
+        for (const span of touchTargets) {
+          const btn = span.closest("button");
+          if (!btn || btn.disabled || !isElementVisible(btn)) continue;
+          const labelEl = btn.querySelector(".mdc-button__label");
+          const btnText = (labelEl?.textContent || btn.innerText || btn.textContent || "").trim().toLowerCase();
+          let ancestor = btn.parentElement;
+          let inMathContext = false;
+          for (let i = 0; i < 15 && ancestor; i++) {
+            const t = (ancestor.innerText || ancestor.textContent || "").toLowerCase();
+            if (t.includes("math") || t.includes("\uC218\uD559")) {
+              inMathContext = true;
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
+          if ((btnText.includes("\uC2DC\uC791") || btnText === "start") && (inMathContext || hasMathText)) {
+            console.log("[SATScraper] Math \uC2DC\uC791 \uBC84\uD2BC \uBC1C\uACAC (mat-mdc-button-touch-target)");
+            btn.scrollIntoView({ behavior: "smooth", block: "center" });
+            await new Promise((resolve) => setTimeout(resolve, 150));
+            let clicked2 = await safeClick(btn);
+            if (!clicked2) clicked2 = await forceClick(btn);
+            if (clicked2) {
+              mathButtonClicked = true;
+              await waitForContentLoad(CONFIG.timeouts.screenTransition);
+            }
+            break;
+          }
+        }
+        if (!mathButtonClicked && mathStartButton) {
+          console.log("[SATScraper] Math \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD (\uD14D\uC2A4\uD2B8 \uAE30\uBC18)");
+          let clicked2 = await safeClick(mathStartButton);
+          if (!clicked2) clicked2 = await forceClick(mathStartButton);
+          if (clicked2) {
+            mathButtonClicked = true;
+            await waitForContentLoad(CONFIG.timeouts.screenTransition);
+          }
+        }
+        if (!mathButtonClicked && mathSectionButton) {
           console.log("[SATScraper] Math \uC139\uC158 \uBC84\uD2BC \uD074\uB9AD");
-          await safeClick(mathSectionButton);
-          await waitForContentLoad(CONFIG.timeouts.screenTransition);
-        } else {
+          let clicked2 = await safeClick(mathSectionButton);
+          if (!clicked2) clicked2 = await forceClick(mathSectionButton);
+          if (clicked2) {
+            mathButtonClicked = true;
+            await waitForContentLoad(CONFIG.timeouts.screenTransition);
+          }
+        }
+        if (!mathButtonClicked) {
           let explicitMathButton = null;
           const sectionCards = document.querySelectorAll('glowing-card.section-card, .section-card, section-overview [class*="section-card"]');
           for (const card of sectionCards) {
@@ -13200,8 +14087,11 @@
           });
           if (explicitMathButton) {
             console.log("[SATScraper] CSS \uC140\uB809\uD130 \uAE30\uBC18 Math \uC2DC\uC791 \uBC84\uD2BC \uBC1C\uACAC. \uD074\uB9AD \uC2DC\uB3C4...", explicitMathButton);
-            await safeClick(explicitMathButton);
-            await waitForContentLoad(CONFIG.timeouts.screenTransition);
+            explicitMathButton.scrollIntoView({ behavior: "smooth", block: "center" });
+            await new Promise((resolve) => setTimeout(resolve, 150));
+            let clicked2 = await safeClick(explicitMathButton);
+            if (!clicked2) clicked2 = await forceClick(explicitMathButton);
+            if (clicked2) await waitForContentLoad(CONFIG.timeouts.screenTransition);
           } else {
             const mathStarted = await clickSectionContinue("Math");
             fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "scraper.js:afterClickSectionContinue", message: "after clickSectionContinue Math", data: { mathStarted }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "MATH" }) }).catch(() => {
@@ -13707,6 +14597,62 @@
       throw error;
     }
   }
+  function generateSectionProblemsPDF(data, sectionKey) {
+    const sectionName = sectionKey === "reading" ? "Reading" : "Math";
+    const problems = data[sectionKey] || [];
+    if (problems.length === 0) return null;
+    const jsPDF = getJSPDF();
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 20;
+    const maxWidth = pageWidth - 2 * margin;
+    let yPosition = margin;
+    const lineHeight = 7;
+    const sectionSpacing = 10;
+    doc.setFontSize(16);
+    doc.setFont(void 0, "bold");
+    doc.text(`SAT ${sectionName} Practice Problems`, margin, yPosition);
+    yPosition += lineHeight * 1.5;
+    doc.setFontSize(10);
+    doc.setFont(void 0, "normal");
+    const dateStr = new Date(data.timestamp || Date.now()).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+    doc.text(`Generated: ${dateStr}`, margin, yPosition);
+    yPosition += lineHeight * 2;
+    yPosition = addProblemsSectionToPDF(doc, sectionName, problems, yPosition, maxWidth, margin, pageHeight, lineHeight, sectionSpacing);
+    doc.setFontSize(8);
+    doc.setTextColor(128, 128, 128);
+    doc.text("Generated by SAT PDF Exporter (Powered by Gemini)", pageWidth / 2, pageHeight - 15, { align: "center" });
+    return doc;
+  }
+  function generateSectionAnswersPDF(data, sectionKey) {
+    const sectionName = sectionKey === "reading" ? "Reading" : "Math";
+    const problems = data[sectionKey] || [];
+    if (problems.length === 0) return null;
+    const jsPDF = getJSPDF();
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 20;
+    const maxWidth = pageWidth - 2 * margin;
+    let yPosition = margin;
+    const lineHeight = 7;
+    const sectionSpacing = 10;
+    doc.setFontSize(16);
+    doc.setFont(void 0, "bold");
+    doc.text(`SAT ${sectionName} Practice Answers`, margin, yPosition);
+    yPosition += lineHeight * 1.5;
+    doc.setFontSize(10);
+    doc.setFont(void 0, "normal");
+    const dateStr = new Date(data.timestamp || Date.now()).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+    doc.text(`Generated: ${dateStr}`, margin, yPosition);
+    yPosition += lineHeight * 2;
+    yPosition = addAnswersSectionToPDF(doc, sectionName, problems, yPosition, maxWidth, margin, pageHeight, lineHeight, sectionSpacing);
+    doc.setFontSize(8);
+    doc.setTextColor(128, 128, 128);
+    doc.text("Generated by SAT PDF Exporter (Powered by Gemini)", pageWidth / 2, pageHeight - 15, { align: "center" });
+    return doc;
+  }
   function generateAnswersPDF(data) {
     try {
       const jsPDF = getJSPDF();
@@ -13774,7 +14720,25 @@
       return generateAnswersPDF(data);
     }
     /**
-     * PDF 다운로드
+     * 섹션별 문제지 PDF 생성
+     * @param {Object} data - 전체 데이터
+     * @param {string} sectionKey - 'reading' | 'math'
+     * @returns {Object|null} jsPDF 문서 객체 또는 null
+     */
+    generateSectionProblemsPDF(data, sectionKey) {
+      return generateSectionProblemsPDF(data, sectionKey);
+    }
+    /**
+     * 섹션별 해설지 PDF 생성
+     * @param {Object} data - 전체 데이터
+     * @param {string} sectionKey - 'reading' | 'math'
+     * @returns {Object|null} jsPDF 문서 객체 또는 null
+     */
+    generateSectionAnswersPDF(data, sectionKey) {
+      return generateSectionAnswersPDF(data, sectionKey);
+    }
+    /**
+     * PDF 다운로드 (기존 2개: 문제지+해설지)
      * @param {Object} problemDoc - 문제지 PDF 문서
      * @param {Object} answerDoc - 정답지 PDF 문서
      * @returns {Promise<void>}
@@ -13797,6 +14761,52 @@
         throw error;
       }
     }
+    /**
+     * 섹션별 PDF 4개 다운로드 (Reading 문제지, Reading 해설지, Math 문제지, Math 해설지)
+     * @param {Object} readingProblemsDoc - Reading 문제지
+     * @param {Object} readingAnswersDoc - Reading 해설지
+     * @param {Object} mathProblemsDoc - Math 문제지
+     * @param {Object} mathAnswersDoc - Math 해설지
+     * @param {Object} options - { copyIndex, totalCopies }
+     */
+    async downloadFourPDFs(readingProblemsDoc, readingAnswersDoc, mathProblemsDoc, mathAnswersDoc, options = {}) {
+      try {
+        const dateStr = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+        const copyIndex = Number.isInteger(options.copyIndex) ? options.copyIndex : 1;
+        const totalCopies = Number.isInteger(options.totalCopies) ? options.totalCopies : 1;
+        const copySuffix = totalCopies > 1 ? `_Set${String(copyIndex).padStart(2, "0")}` : "";
+        const downloadDelay = Math.max(CONFIG.timeouts.pdfDownloadDelay, 250);
+        const files = [
+          { doc: readingProblemsDoc, name: `SAT_Reading_Problems_${dateStr}${copySuffix}.pdf` },
+          { doc: readingAnswersDoc, name: `SAT_Reading_Answers_${dateStr}${copySuffix}.pdf` },
+          { doc: mathProblemsDoc, name: `SAT_Math_Problems_${dateStr}${copySuffix}.pdf` },
+          { doc: mathAnswersDoc, name: `SAT_Math_Answers_${dateStr}${copySuffix}.pdf` }
+        ];
+        for (const { doc, name } of files) {
+          if (doc) {
+            console.log(`[PDFGenerator] PDF \uC800\uC7A5: ${name}`);
+            try {
+              const blob = doc.output("blob");
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = name;
+              a.style.display = "none";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            } catch (saveErr) {
+              doc.save(name);
+            }
+            await new Promise((resolve) => setTimeout(resolve, downloadDelay));
+          }
+        }
+      } catch (error) {
+        console.error("[PDFGenerator] PDF \uB2E4\uC6B4\uB85C\uB4DC \uC624\uB958:", error);
+        throw error;
+      }
+    }
   };
 
   // src/frame/workerFrame.js
@@ -13804,8 +14814,24 @@
   function looksLikeSatQuestionUI() {
     try {
       const text = (document.body?.innerText || document.body?.textContent || "").slice(0, 5e3).toLowerCase();
-      const hasProgress = /\b\d+\s*\/\s*\d+\b/.test(text) || /question\s*\d+/i.test(text);
       const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+      const hasStartTestButton = buttons.some((b) => {
+        if (!b.offsetParent || b.disabled) return false;
+        const btnText = ((b.innerText || "") + " " + (b.getAttribute("aria-label") || "")).trim();
+        return /테스트\s*시작|start\s*test/i.test(btnText);
+      });
+      if (hasStartTestButton) {
+        const hasRealProgress = /\b\d+\s*\/\s*(27|22)\b/.test(text);
+        const hasChoices = buttons.filter((b) => {
+          const t = ((b.innerText || "") + " " + (b.getAttribute("aria-label") || "")).trim();
+          return /^[A-D]\b/.test(t) || /choice\s*[A-D]/i.test(t);
+        }).length >= 2;
+        if (!hasRealProgress || !hasChoices) {
+          console.log("[SAT FRAME] \uC124\uC815 \uD654\uBA74(\uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uC788\uC74C) \u2192 \uBB38\uC81C \uD654\uBA74 \uC544\uB2D8");
+          return false;
+        }
+      }
+      const hasProgress = /\b\d+\s*\/\s*\d+\b/.test(text) || /question\s*\d+/i.test(text);
       const hasNextish = buttons.some((b) => {
         const btnText = ((b.innerText || "") + " " + (b.getAttribute("aria-label") || "")).toLowerCase();
         return /next|다음|continue|계속|submit|제출/i.test(btnText);
@@ -13867,9 +14893,7 @@
         } catch (e) {
         }
       }
-      if (sentCount === 0) {
-        window.postMessage({ type: "SAT_PROBE", probeId }, targetOrigin);
-      }
+      window.postMessage({ type: "SAT_PROBE", probeId }, targetOrigin);
       console.log("[FRAME] probe sent to frames", {
         frameCount: window.frames.length,
         sentCount,
@@ -13887,6 +14911,15 @@
       const msg = ev?.data;
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "SAT_PROBE") {
+        if (window.top !== window) {
+          if (ev.source) {
+            try {
+              ev.source.postMessage({ type: "SAT_PROBE_RESULT", probeId: msg.probeId, ok: false, isTop: false }, ev.origin || location.origin);
+            } catch (_) {
+            }
+          }
+          return;
+        }
         console.log(`[FRAME] probe received top? ${window === window.top} href: ${window.location.href}`);
         const ok = looksLikeSatQuestionUI();
         console.log(`[FRAME] probe result: ${ok ? "looks like SAT UI" : "not SAT UI"}`);
@@ -13915,6 +14948,16 @@
         return;
       }
       if (msg.type === "SAT_START") {
+        if (window.top !== window) {
+          console.warn("[FRAME-GUARD] iframe abort", location.href);
+          return;
+        }
+        console.log("[CTX]", {
+          isTop: window.top === window,
+          href: location.href,
+          hasActivitySet: !!document.querySelector("activity-set"),
+          choices: document.querySelectorAll("mat-action-list.choices-container button").length
+        });
         console.log(`[FRAME] SAT_START received top? ${window === window.top} href: ${window.location.href}`);
         if (!looksLikeSatQuestionUI()) {
           console.log("[FRAME] SAT_START ignored: not SAT UI");
@@ -13931,6 +14974,7 @@
         window.__SAT_IS_WORKER = true;
         (async () => {
           try {
+            setExportRunning(true);
             console.log("[SAT WORKER] ===== Worker \uD504\uB808\uC784\uC5D0\uC11C \uC218\uC9D1 \uC2DC\uC791 =====");
             if (!window.__SAT_APP) {
               if (typeof SATApp !== "undefined") {
@@ -13940,9 +14984,43 @@
                 return;
               }
             }
-            if (!isQuestionScreen() && getProgressState() === null) {
+            const workerIsQuestion = isQuestionScreen();
+            const workerProgress = getProgressState();
+            try {
+              if (window.top && window.top.console && window.top.console.warn) {
+                window.top.console.warn("[NAV_INIT] \u2605 worker: \uC870\uAC74 \uCCB4\uD06C", {
+                  isQuestionScreen: workerIsQuestion,
+                  getProgressState: workerProgress,
+                  willCallNav: !workerIsQuestion && workerProgress === null
+                });
+              }
+            } catch (_) {
+            }
+            if (!workerIsQuestion && workerProgress === null) {
               console.log("[SAT WORKER] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2DC\uC791");
+              try {
+                window.top?.console?.warn?.("[NAV_INIT] \u2605 worker\uC5D0\uC11C handleInitialNavigation \uD638\uCD9C \uC9C1\uC804", window.location.href);
+              } catch (_) {
+              }
               await window.__SAT_APP.navigator.handleInitialNavigation();
+            } else {
+              try {
+                window.top?.console?.warn?.("[NAV_INIT] \u2605 worker: handleInitialNavigation \uC2A4\uD0B5 (\uC774\uBBF8 \uBB38\uC81C \uD654\uBA74 \uB610\uB294 \uC9C4\uD589 \uC911)", { workerIsQuestion, workerProgress });
+              } catch (_) {
+              }
+            }
+            const hasSAT = !!document.querySelector("activity-set") && !!document.querySelector('[data-test-id="next-button"]');
+            if (!hasSAT) {
+              console.warn("[FRAME-GUARD] no SAT dom in this frame, abort", describeDoc(document));
+              try {
+                replyTarget.postMessage({
+                  type: "SAT_COLLECTION_ERROR",
+                  error: "FRAME_GUARD: no SAT DOM in this frame",
+                  href: window.location.href
+                }, replyOrigin);
+              } catch (e) {
+              }
+              return;
             }
             console.log("[SAT WORKER] \uBB38\uC81C \uC218\uC9D1 \uC2DC\uC791");
             const allData = await window.__SAT_APP.scraper.collectAllProblems();
@@ -13970,6 +15048,8 @@
             } catch (e) {
               console.warn("[SAT WORKER] SAT_COLLECTION_ERROR postMessage \uC2E4\uD328:", e);
             }
+          } finally {
+            setExportRunning(false);
           }
         })();
         return;
@@ -14374,9 +15454,9 @@
       );
       if (directButton) {
         console.log("[GeminiSetup] \uC2DC\uC791 \uBC84\uD2BC \uBC1C\uACAC (\uC815\uD655 \uC140\uB809\uD130)");
-        const clicked = await safeClick(directButton);
-        if (clicked) {
-          await new Promise((resolve) => setTimeout(resolve, 600));
+        const clicked2 = await safeClick(directButton);
+        if (clicked2) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
           return true;
         }
       }
@@ -14399,9 +15479,9 @@
           const text = (el.innerText || el.textContent || "").trim().toLowerCase();
           if (text.includes("\uC2DC\uC791") || text.includes("start")) {
             console.log("[GeminiSetup] \uC2DC\uC791 \uBC84\uD2BC \uBC1C\uACAC:", selector);
-            const clicked = await safeClick(el);
-            if (clicked) {
-              await new Promise((resolve) => setTimeout(resolve, 600));
+            const clicked2 = await safeClick(el);
+            if (clicked2) {
+              await new Promise((resolve) => setTimeout(resolve, 200));
               return true;
             }
           }
@@ -14417,7 +15497,7 @@
     if (touchTarget) {
       const button = touchTarget.closest("button");
       if (button && await safeClick(button)) {
-        await new Promise((resolve) => setTimeout(resolve, 600));
+        await new Promise((resolve) => setTimeout(resolve, 200));
         return true;
       }
     }
@@ -14439,9 +15519,9 @@
         if (el) {
           const clickTarget = el.tagName === "BUTTON" ? el : el.closest("button") || el;
           console.log("[GeminiSetup] \uCCAB \uBC88\uC9F8 \uD1A0\uAE00 \uBC1C\uACAC:", selector);
-          const clicked = await safeClick(clickTarget);
-          if (clicked) {
-            await new Promise((resolve) => setTimeout(resolve, 400));
+          const clicked2 = await safeClick(clickTarget);
+          if (clicked2) {
+            await new Promise((resolve) => setTimeout(resolve, 150));
             return true;
           }
         }
@@ -14465,9 +15545,9 @@
     }
     const second = toggles[1];
     const clickTarget = second.tagName === "BUTTON" ? second : second.closest("button") || second;
-    const clicked = await safeClick(clickTarget);
-    if (clicked) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+    const clicked2 = await safeClick(clickTarget);
+    if (clicked2) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
       return true;
     }
     console.warn("[GeminiSetup] \uB450 \uBC88\uC9F8 \uD1A0\uAE00\uC744 \uCC3E\uC9C0 \uBABB\uD568");
@@ -14482,7 +15562,7 @@
     while (Date.now() - startTime < timeout && !startButtonDone) {
       startButtonDone = await clickStartButton();
       if (!startButtonDone) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
     if (!startButtonDone) {
@@ -14490,25 +15570,25 @@
     } else {
       showToast("\uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC644\uB8CC. \uD1A0\uAE00 \uC124\uC815 \uC911...", "info");
     }
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await new Promise((resolve) => setTimeout(resolve, 300));
     let firstToggleDone = false;
     const toggleStartTime = Date.now();
     while (Date.now() - toggleStartTime < timeout && !firstToggleDone) {
       firstToggleDone = await clickFirstToggle();
       if (!firstToggleDone) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
     if (!firstToggleDone) {
       console.warn("[GeminiSetup] \uCCAB \uBC88\uC9F8 \uD1A0\uAE00 \uD074\uB9AD \uC2E4\uD328 (\uACC4\uC18D \uC9C4\uD589)");
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     let secondToggleDone = false;
     const secondToggleStartTime = Date.now();
     while (Date.now() - secondToggleStartTime < timeout && !secondToggleDone) {
       secondToggleDone = await clickSecondToggle();
       if (!secondToggleDone) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
     if (!secondToggleDone) {
@@ -14772,12 +15852,14 @@
       }
       try {
         this.isProcessing = true;
+        setExportRunning(true);
         console.log("[SATApp] ===== Export to PDF \uBC84\uD2BC \uD074\uB9AD\uB428 =====");
         console.log("[SATApp] \uD604\uC7AC \uD504\uB808\uC784:", window.location.href, "top?", window === window.top);
         const exportSetCount = await this.promptExportSetCount();
         if (exportSetCount === null) {
           showToast("PDF \uC0DD\uC131\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "info");
           this.isProcessing = false;
+          setExportRunning(false);
           return;
         }
         button.disabled = true;
@@ -14804,13 +15886,22 @@
           } catch (e) {
             console.warn("[SATApp] init \uC7AC\uD638\uCD9C \uC911 \uC624\uB958:", e);
           }
-          await new Promise((resolve) => setTimeout(resolve, 600));
+          await new Promise((resolve) => setTimeout(resolve, 200));
         }
         try {
           console.log("[SATApp] Export \uC804 \uC124\uC815 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC2DC\uB3C4");
           await runSetupSequence();
         } catch (setupError) {
           console.warn("[SATApp] \uC124\uC815 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911 \uC624\uB958 (\uACC4\uC18D \uC9C4\uD589):", setupError);
+        }
+        try {
+          console.log("[SATApp] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC2DC\uB3C4");
+          showToast("\uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC911...", "info");
+          await configureAndStartTest();
+          showToast("\uBB38\uC81C \uD654\uBA74 \uB85C\uB4DC \uB300\uAE30 \uC911...", "info");
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        } catch (startError) {
+          console.warn("[SATApp] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uCC98\uB9AC \uC911 \uC624\uB958 (\uACC4\uC18D \uC9C4\uD589):", startError);
         }
         console.log("[FRAME] selectWorkerFrame start");
         showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784 \uCC3E\uB294 \uC911...", "info");
@@ -14826,6 +15917,7 @@
             console.log("[SATApp] \uD604\uC7AC \uD504\uB808\uC784\uC774 \uBB38\uC81C UI\uC785\uB2C8\uB2E4. \uC774 \uD504\uB808\uC784\uC5D0\uC11C \uC791\uC5C5\uD569\uB2C8\uB2E4.");
             window.__SAT_IS_WORKER = true;
             console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2DC\uC791");
+            console.warn("[NAV_INIT] \u2605 \uD638\uCD9C \uC704\uCE58: content.entry (top, worker \uC5C6\uC74C\xB7\uD604\uC7AC\uAC00 \uBB38\uC81C UI)", window.location.href);
             showToast("\uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911...", "info");
             await this.navigator.handleInitialNavigation();
             console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC644\uB8CC");
@@ -14836,6 +15928,7 @@
             console.warn("[SATApp] Worker \uD504\uB808\uC784\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uD604\uC7AC \uD504\uB808\uC784\uC5D0\uC11C \uC2DC\uB3C4\uD569\uB2C8\uB2E4.");
             showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uD604\uC7AC \uD504\uB808\uC784\uC5D0\uC11C \uC2DC\uB3C4\uD569\uB2C8\uB2E4.", "error");
             console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2DC\uC791");
+            console.warn("[NAV_INIT] \u2605 \uD638\uCD9C \uC704\uCE58: content.entry (top, fallback)", window.location.href);
             showToast("\uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911...", "info");
             await this.navigator.handleInitialNavigation();
             console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC644\uB8CC");
@@ -14878,24 +15971,41 @@
           throw new Error("\uCD94\uCD9C\uD560 SAT \uBB38\uC81C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
         }
         const totalProblems = allData.reading.length + allData.math.length;
-        showToast(`${totalProblems}\uAC1C\uC758 \uBB38\uC81C\uB97C \uC218\uC9D1\uD588\uC2B5\uB2C8\uB2E4. PDF ${exportSetCount}\uC138\uD2B8 \uC0DD\uC131 \uC911...`, "info");
+        if (!allData.timestamp) allData.timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        showToast(`${totalProblems}\uAC1C\uC758 \uBB38\uC81C\uB97C \uC218\uC9D1\uD588\uC2B5\uB2C8\uB2E4. PDF ${exportSetCount}\uC138\uD2B8(4\uAC1C/\uC138\uD2B8) \uC0DD\uC131 \uC911...`, "info");
+        const readingCount = (allData.reading || []).length;
+        const mathCount = (allData.math || []).length;
+        const expectedPdfs = (readingCount > 0 ? 2 : 0) + (mathCount > 0 ? 2 : 0);
+        console.log(`[SATApp] PDF \uC0DD\uC131 \uC608\uC815: Reading ${readingCount}\uAC1C \u2192 ${readingCount > 0 ? "\uBB38\uC81C\uC9C0+\uD574\uC124\uC9C0" : "\uC2A4\uD0B5"}, Math ${mathCount}\uAC1C \u2192 ${mathCount > 0 ? "\uBB38\uC81C\uC9C0+\uD574\uC124\uC9C0" : "\uC2A4\uD0B5"} (\uCD1D ${expectedPdfs}\uAC1C)`);
         for (let i = 1; i <= exportSetCount; i += 1) {
-          showToast(`\uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
-          const problemDoc = this.pdfGenerator.generateProblemsPDF(allData);
-          showToast(`\uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
-          const answerDoc = this.pdfGenerator.generateAnswersPDF(allData);
-          await this.pdfGenerator.downloadPDFs(problemDoc, answerDoc, {
-            copyIndex: i,
-            totalCopies: exportSetCount
-          });
+          showToast(`Reading \uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
+          const readingProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, "reading");
+          showToast(`Reading \uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
+          const readingAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, "reading");
+          showToast(`Math \uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
+          const mathProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, "math");
+          showToast(`Math \uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
+          const mathAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, "math");
+          const nullCount = [readingProblemsDoc, readingAnswersDoc, mathProblemsDoc, mathAnswersDoc].filter((d) => d == null).length;
+          if (nullCount > 0) {
+            console.warn(`[SATApp] null PDF ${nullCount}\uAC1C (\uC77D\uAE30:${readingCount}\uAC1C, \uC218\uD559:${mathCount}\uAC1C) - \uBB38\uC81C\uAC00 \uC5C6\uB294 \uC139\uC158\uC740 PDF \uBBF8\uC0DD\uC131`);
+          }
+          await this.pdfGenerator.downloadFourPDFs(
+            readingProblemsDoc,
+            readingAnswersDoc,
+            mathProblemsDoc,
+            mathAnswersDoc,
+            { copyIndex: i, totalCopies: exportSetCount }
+          );
         }
-        showToast(`PDF ${exportSetCount}\uC138\uD2B8\uAC00 \uC131\uACF5\uC801\uC73C\uB85C \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4!`, "success");
+        showToast(`PDF ${exportSetCount}\uC138\uD2B8(\uCD1D ${exportSetCount * 4}\uAC1C)\uAC00 \uC131\uACF5\uC801\uC73C\uB85C \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4!`, "success");
         button.textContent = "\u2713 Exported!";
         setTimeout(() => {
           button.textContent = "Export to PDF";
           button.disabled = false;
           button.classList.remove("loading");
           this.isProcessing = false;
+          setExportRunning(false);
         }, 2e3);
       } catch (error) {
         console.error("[ERROR] handleExportClick failed:", error);
@@ -14910,6 +16020,7 @@
         button.classList.remove("loading");
         button.textContent = "Export to PDF";
         this.isProcessing = false;
+        setExportRunning(false);
       }
     }
   };

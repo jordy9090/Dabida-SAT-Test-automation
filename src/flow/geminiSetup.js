@@ -23,7 +23,7 @@ export async function clickStartButton() {
       console.log('[GeminiSetup] 시작 버튼 발견 (정확 셀렉터)');
       const clicked = await safeClick(directButton);
       if (clicked) {
-        await new Promise(resolve => setTimeout(resolve, 600));
+        await new Promise(resolve => setTimeout(resolve, 200));
         return true;
       }
     }
@@ -51,7 +51,7 @@ export async function clickStartButton() {
           console.log('[GeminiSetup] 시작 버튼 발견:', selector);
           const clicked = await safeClick(el);
           if (clicked) {
-            await new Promise(resolve => setTimeout(resolve, 600));
+            await new Promise(resolve => setTimeout(resolve, 200));
             return true;
           }
         }
@@ -69,7 +69,7 @@ export async function clickStartButton() {
   if (touchTarget) {
     const button = touchTarget.closest('button');
     if (button && (await safeClick(button))) {
-      await new Promise(resolve => setTimeout(resolve, 600));
+      await new Promise(resolve => setTimeout(resolve, 200));
       return true;
     }
   }
@@ -101,7 +101,7 @@ export async function clickFirstToggle() {
         console.log('[GeminiSetup] 첫 번째 토글 발견:', selector);
         const clicked = await safeClick(clickTarget);
         if (clicked) {
-          await new Promise(resolve => setTimeout(resolve, 400));
+          await new Promise(resolve => setTimeout(resolve, 150));
           return true;
         }
       }
@@ -139,7 +139,7 @@ export async function clickSecondToggle() {
   const clickTarget = second.tagName === 'BUTTON' ? second : second.closest('button') || second;
   const clicked = await safeClick(clickTarget);
   if (clicked) {
-    await new Promise(resolve => setTimeout(resolve, 400));
+    await new Promise(resolve => setTimeout(resolve, 150));
     return true;
   }
 
@@ -166,7 +166,7 @@ export async function runSetupSequence() {
   while (Date.now() - startTime < timeout && !startButtonDone) {
     startButtonDone = await clickStartButton();
     if (!startButtonDone) {
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 
@@ -177,7 +177,7 @@ export async function runSetupSequence() {
   }
 
   // 토글이 나타날 때까지 대기
-  await new Promise(resolve => setTimeout(resolve, 800));
+  await new Promise(resolve => setTimeout(resolve, 300));
 
   // 첫 번째 토글: 일정 시간 동안 재시도
   let firstToggleDone = false;
@@ -185,14 +185,14 @@ export async function runSetupSequence() {
   while (Date.now() - toggleStartTime < timeout && !firstToggleDone) {
     firstToggleDone = await clickFirstToggle();
     if (!firstToggleDone) {
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
   if (!firstToggleDone) {
     console.warn('[GeminiSetup] 첫 번째 토글 클릭 실패 (계속 진행)');
   }
 
-  await new Promise(resolve => setTimeout(resolve, 250));
+  await new Promise(resolve => setTimeout(resolve, 100));
 
   // 두 번째 토글: 첫 번째와 동일하게 재시도
   let secondToggleDone = false;
@@ -200,7 +200,7 @@ export async function runSetupSequence() {
   while (Date.now() - secondToggleStartTime < timeout && !secondToggleDone) {
     secondToggleDone = await clickSecondToggle();
     if (!secondToggleDone) {
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
   if (!secondToggleDone) {

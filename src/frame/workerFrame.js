@@ -1,7 +1,8 @@
 // Extracted frame election and messaging functions from content.js
 // NOTE: Logic must remain identical to original implementation.
 
-import { isQuestionScreen, getProgressState } from '../dom/extract.js';
+import { isQuestionScreen, getProgressState, describeDoc } from '../dom/extract.js';
+import { setExportRunning } from '../dom/wait.js';
 
 /**
  * 문제 UI가 있는 프레임인지 판정 (널널하게 잡기)
@@ -10,12 +11,30 @@ import { isQuestionScreen, getProgressState } from '../dom/extract.js';
 export function looksLikeSatQuestionUI() {
   try {
     const text = (document.body?.innerText || document.body?.textContent || '').slice(0, 5000).toLowerCase();
+    const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+
+    // 0. 설정 화면(토글 + '테스트 시작' 버튼)이면 문제 화면 아님 - 먼저 '테스트 시작' 클릭 필요
+    const hasStartTestButton = buttons.some(b => {
+      if (!b.offsetParent || b.disabled) return false;
+      const btnText = ((b.innerText || '') + ' ' + (b.getAttribute('aria-label') || '')).trim();
+      return /테스트\s*시작|start\s*test/i.test(btnText);
+    });
+    if (hasStartTestButton) {
+      const hasRealProgress = /\b\d+\s*\/\s*(27|22)\b/.test(text);
+      const hasChoices = buttons.filter(b => {
+        const t = ((b.innerText || '') + ' ' + (b.getAttribute('aria-label') || '')).trim();
+        return /^[A-D]\b/.test(t) || /choice\s*[A-D]/i.test(t);
+      }).length >= 2;
+      if (!hasRealProgress || !hasChoices) {
+        console.log('[SAT FRAME] 설정 화면(테스트 시작 버튼 있음) → 문제 화면 아님');
+        return false;
+      }
+    }
     
     // 1. 진행표시 (1/27, Question 1 등)
     const hasProgress = /\b\d+\s*\/\s*\d+\b/.test(text) || /question\s*\d+/i.test(text);
     
     // 2. Next/Submit 버튼 존재
-    const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
     const hasNextish = buttons.some(b => {
       const btnText = ((b.innerText || '') + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
       return /next|다음|continue|계속|submit|제출/i.test(btnText);
@@ -93,10 +112,8 @@ export async function findWorkerFrame() {
         // cross-origin frame 접근 불가 - 스킵
       }
     }
-    // same-origin frame이 없으면 현재 window에 broadcast (fallback)
-    if (sentCount === 0) {
-      window.postMessage({ type: 'SAT_PROBE', probeId }, targetOrigin);
-    }
+    // 현재 창(top)에도 probe 전송 — top이 worker로 응답할 수 있도록
+    window.postMessage({ type: 'SAT_PROBE', probeId }, targetOrigin);
     console.log('[FRAME] probe sent to frames', {
       frameCount: window.frames.length,
       sentCount,
@@ -121,9 +138,16 @@ export function setupFrameMessageListener() {
     const msg = ev?.data;
     if (!msg || typeof msg !== 'object') return;
     
-    // SAT_PROBE 수신: 문제 UI가 있는지 확인
-    // 주의: ev.source로만 응답 전송. '*' 사용 시 구글 개인정보/계정 선택 iframe이 메시지를 받아 탭이 열림
+    // SAT_PROBE 수신: top에서만 ok:true 허용 (iframe은 worker로 선출되지 않도록)
     if (msg.type === 'SAT_PROBE') {
+      if (window.top !== window) {
+        if (ev.source) {
+          try {
+            ev.source.postMessage({ type: 'SAT_PROBE_RESULT', probeId: msg.probeId, ok: false, isTop: false }, ev.origin || location.origin);
+          } catch (_) {}
+        }
+        return;
+      }
       console.log(`[FRAME] probe received top? ${window === window.top} href: ${window.location.href}`);
       const ok = looksLikeSatQuestionUI();
       console.log(`[FRAME] probe result: ${ok ? 'looks like SAT UI' : 'not SAT UI'}`);
@@ -153,9 +177,18 @@ export function setupFrameMessageListener() {
       return;
     }
     
-    // SAT_START 수신: worker 프레임에서만 작업 시작
-    // 주의: 결과는 ev.source로만 전송. '*' 사용 시 구글 개인정보/계정 선택 iframe이 메시지를 받아 탭이 열림
+    // SAT_START 수신: top frame에서만 수집/run 실행 (iframe이 받으면 무시)
     if (msg.type === 'SAT_START') {
+      if (window.top !== window) {
+        console.warn('[FRAME-GUARD] iframe abort', location.href);
+        return;
+      }
+      console.log('[CTX]', {
+        isTop: window.top === window,
+        href: location.href,
+        hasActivitySet: !!document.querySelector('activity-set'),
+        choices: document.querySelectorAll('mat-action-list.choices-container button').length
+      });
       console.log(`[FRAME] SAT_START received top? ${window === window.top} href: ${window.location.href}`);
       if (!looksLikeSatQuestionUI()) {
         console.log('[FRAME] SAT_START ignored: not SAT UI');
@@ -181,6 +214,7 @@ export function setupFrameMessageListener() {
       // This will be fully integrated after all classes are moved
       (async () => {
         try {
+          setExportRunning(true);
           console.log('[SAT WORKER] ===== Worker 프레임에서 수집 시작 =====');
           
           // SATApp 인스턴스 생성 (worker frame에서)
@@ -195,12 +229,39 @@ export function setupFrameMessageListener() {
           }
           
           // 자동 진입 시퀀스 (이미 문제 화면이면 스킵)
-          if (!isQuestionScreen() && getProgressState() === null) {
+          const workerIsQuestion = isQuestionScreen();
+          const workerProgress = getProgressState();
+          try {
+            if (window.top && window.top.console && window.top.console.warn) {
+              window.top.console.warn('[NAV_INIT] ★ worker: 조건 체크', {
+                isQuestionScreen: workerIsQuestion,
+                getProgressState: workerProgress,
+                willCallNav: !workerIsQuestion && workerProgress === null
+              });
+            }
+          } catch (_) {}
+          if (!workerIsQuestion && workerProgress === null) {
             console.log('[SAT WORKER] 자동 진입 시퀀스 시작');
+            try { window.top?.console?.warn?.('[NAV_INIT] ★ worker에서 handleInitialNavigation 호출 직전', window.location.href); } catch(_){}
             await window.__SAT_APP.navigator.handleInitialNavigation();
+          } else {
+            try { window.top?.console?.warn?.('[NAV_INIT] ★ worker: handleInitialNavigation 스킵 (이미 문제 화면 또는 진행 중)', { workerIsQuestion, workerProgress }); } catch(_){}
           }
           
-          // 문제 수집
+          // 실행 프레임 가드: SAT DOM이 있는 frame에서만 수집
+          const hasSAT = !!document.querySelector('activity-set') &&
+            !!document.querySelector('[data-test-id="next-button"]');
+          if (!hasSAT) {
+            console.warn('[FRAME-GUARD] no SAT dom in this frame, abort', describeDoc(document));
+            try {
+              replyTarget.postMessage({
+                type: 'SAT_COLLECTION_ERROR',
+                error: 'FRAME_GUARD: no SAT DOM in this frame',
+                href: window.location.href
+              }, replyOrigin);
+            } catch (e) {}
+            return;
+          }
           console.log('[SAT WORKER] 문제 수집 시작');
           const allData = await window.__SAT_APP.scraper.collectAllProblems();
           
@@ -231,6 +292,8 @@ export function setupFrameMessageListener() {
           } catch (e) {
             console.warn('[SAT WORKER] SAT_COLLECTION_ERROR postMessage 실패:', e);
           }
+        } finally {
+          setExportRunning(false);
         }
       })();
       

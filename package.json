@@ -4,6 +4,7 @@
   "description": "Chrome Extension to extract SAT problems from Google Gemini and export to PDF",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "prebuild": "node -e \"require('fs').mkdirSync('dist',{recursive:true}); require('fs').writeFileSync('dist/build-info.txt', 'cwd: '+process.cwd()+'\\nbuilt: '+new Date().toISOString()); console.log('Building in:', process.cwd());\"",
     "build": "esbuild content.js --bundle --format=iife --platform=browser --target=chrome120 --outfile=dist/content.js --sourcemap --banner:js=\"// Gemini SAT PDF Exporter - Bundled Content Script\"",
     "playwright:login": "npx ts-node playwright/scripts/login.ts",
     "playwright:smoke": "npx ts-node playwright/scripts/smoke.ts",

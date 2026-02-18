@@ -17,19 +17,19 @@ export const CONFIG = {
   },
   // 타임아웃 설정 (밀리초) - 속도 최적화 (문제 스크랩 집중)
   timeouts: {
-    elementWait: 80,         // 요소 대기 간격
-    maxElementWait: 2500,    // 최대 요소 대기 시간
-    screenTransition: 150,  // 화면 전환 대기 (UI 반응 빠름)
-    contentLoad: 150,        // 콘텐츠 로드 대기
-    gradingWait: 1000,      // 채점 완료 대기
-    clickDelay: 120,        // 클릭 후 대기
-    scrollDelay: 150,       // 스크롤 후 대기
-    pdfDownloadDelay: 300,  // PDF 다운로드 간격
-    // 문제 생성 탭: 선지 선택 구간 대기 (너무 빨리 지나가는 것 방지, 특히 사진 있는 문제)
-    beforeChoiceClick: 400,           // 선지 클릭 전 대기 (문제/선지 인지 시간)
-    beforeChoiceClickWithImage: 2800, // 이미지 있는 문제: 선지 클릭 전 2.8초 대기
-    afterChoiceClick: 450,            // 선지 클릭 후 제출 전 대기
-    afterChoiceClickWithImage: 2800,  // 이미지 있는 문제: 선지 클릭 후 2.8초 대기
+    elementWait: 25,         // 요소 대기 간격
+    maxElementWait: 1000,    // 최대 요소 대기 시간
+    screenTransition: 35,   // 화면 전환 대기
+    contentLoad: 50,         // 콘텐츠 로드 대기
+    gradingWait: 200,       // 채점 완료 대기
+    clickDelay: 30,         // 클릭 후 대기
+    scrollDelay: 35,        // 스크롤 후 대기
+    pdfDownloadDelay: 300,  // PDF 다운로드 간격 (연속 4개 안정화)
+    // 문제 생성 탭: 선지 선택 구간 대기
+    beforeChoiceClick: 20,            // 선지 클릭 전 대기
+    beforeChoiceClickWithImage: 80,   // 이미지 있는 문제: 선지 클릭 전 대기
+    afterChoiceClick: 20,             // 선지 클릭 후 제출 전 대기
+    afterChoiceClickWithImage: 80,    // 이미지 있는 문제: 선지 클릭 후 대기
   },
   // 재시도 설정
   retries: {

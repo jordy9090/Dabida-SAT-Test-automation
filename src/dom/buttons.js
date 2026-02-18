@@ -2,7 +2,7 @@
 // NOTE: Logic must remain identical to original implementation.
 
 import { deepQuerySelectorAll, isElementVisible, dumpHTMLStructure } from './deepQuery.js';
-import { waitForContentLoad } from './wait.js';
+import { waitForContentLoad, waitForCondition } from './wait.js';
 import { getCurrentProblemNumber, getProgressState, getQuestionSignature } from './extract.js';
 import { findSatRoot, selectNextButton, findNavigationButton } from './query.js';
 import { TEMP_MODE } from '../config/constants.js';
@@ -19,45 +19,49 @@ function readProgressNumber() {
   return null;
 }
 
+/** 버튼 후보가 클릭해도 안전한지 (새 탭/링크 방지) */
+function isSafeButton(btn) {
+  if (btn.tagName === 'A') {
+    const href = btn.getAttribute('href');
+    const target = btn.getAttribute('target');
+    if (href && (href.startsWith('http') || target === '_blank' || target === '_new')) return false;
+    if (href && href !== '#' && !href.startsWith('javascript:')) return false;
+  }
+  if (btn.hasAttribute('href') && btn.getAttribute('href') !== '#' && !btn.getAttribute('href').startsWith('javascript:')) return false;
+  if (btn.getAttribute('target') === '_blank' || btn.getAttribute('target') === '_new') return false;
+  return true;
+}
+
 export function findButtonByText(...labels) {
   const buttons = Array.from(deepQuerySelectorAll('button, [role="button"]'));
   return buttons.find(btn => {
     if (!isElementVisible(btn) || btn.disabled) return false;
-    
-    // 다른 창으로 넘어가는 요소 제외
-    if (btn.tagName === 'A') {
-      const href = btn.getAttribute('href');
-      const target = btn.getAttribute('target');
-      // 외부 링크나 새 창 링크는 제외
-      if (href && (href.startsWith('http') || target === '_blank' || target === '_new')) {
-        console.warn('[SAT-DEBUG] 외부 링크 제외:', href, target);
-        return false;
-      }
-      // href가 있으면 제외 (내부 네비게이션도 방지)
-      if (href && href !== '#' && !href.startsWith('javascript:')) {
-        console.warn('[SAT-DEBUG] 네비게이션 링크 제외:', href);
-        return false;
-      }
-    }
-    
-    // href 속성이 있는 요소는 제외 (버튼처럼 보이지만 링크인 경우)
-    if (btn.hasAttribute('href') && btn.getAttribute('href') !== '#' && !btn.getAttribute('href').startsWith('javascript:')) {
-      console.warn('[SAT-DEBUG] href 속성 있는 요소 제외:', btn.getAttribute('href'));
+    if (!isSafeButton(btn)) {
+      if (btn.tagName === 'A' || btn.hasAttribute('href')) console.warn('[SAT-DEBUG] 링크/새창 요소 제외:', btn.getAttribute?.('href'), btn.getAttribute?.('target'));
       return false;
     }
-    
-    // target="_blank" 속성이 있으면 제외
-    if (btn.getAttribute('target') === '_blank' || btn.getAttribute('target') === '_new') {
-      console.warn('[SAT-DEBUG] 새 창 열기 속성 있는 요소 제외');
-      return false;
-    }
-    
     const text = (btn.innerText || btn.textContent || '').trim();
     const ariaLabel = (btn.getAttribute('aria-label') || '').trim();
-    return labels.some(label => 
-      text.includes(label) || ariaLabel.includes(label)
-    );
+    return labels.some(label => text.includes(label) || ariaLabel.includes(label));
   });
+}
+
+/**
+ * 지정한 root 내부에서만 텍스트로 버튼 검색 (설정 화면에서 푸터/구글 링크 클릭 방지)
+ * @param {Element} root - 검색 범위 (예: activity-set, learning-immersive-panel)
+ * @param {...string} labels - 찾을 버튼 텍스트들
+ * @returns {Element|null}
+ */
+export function findButtonByTextInRoot(root, ...labels) {
+  if (!root || !root.querySelectorAll) return findButtonByText(...labels);
+  const buttons = Array.from(deepQuerySelectorAll('button, [role="button"]', root));
+  return buttons.find(btn => {
+    if (!isElementVisible(btn) || btn.disabled) return false;
+    if (!isSafeButton(btn)) return false;
+    const text = (btn.innerText || btn.textContent || '').trim();
+    const ariaLabel = (btn.getAttribute('aria-label') || '').trim();
+    return labels.some(label => text.includes(label) || ariaLabel.includes(label));
+  }) || null;
 }
 
 // getSatRoot는 query.js의 findSatRoot로 대체됨 (순환 의존성 해결)
@@ -114,25 +118,21 @@ export async function clickSubmitWithConfirmation(onAfterConfirmClick) {
   const allButtons = Array.from(satRoot.querySelectorAll('button, [role="button"]'));
   console.log(`[SUBMIT] satRoot 내부 버튼: ${allButtons.length}개`);
   
-  // Step 2: visible & not disabled 필터
-  const visibleButtons = allButtons.filter(b => {
-    if (!isElementVisible(b)) return false;
+  // Step 2: 먼저 visible, 없으면 존재 기준 (화면 밖 제출 버튼 대응)
+  let buttonsToScore = allButtons.filter(b => {
     if (b.disabled) return false;
-    // satRoot 내부인지 확인
     if (!satRoot.contains(b)) return false;
     return true;
   });
+  const visibleButtons = buttonsToScore.filter(b => isElementVisible(b));
+  if (visibleButtons.length > 0) buttonsToScore = visibleButtons;
+  else console.log('[SUBMIT] visible 버튼 0개 → 존재 기준으로 제출 버튼 검색');
   
-  console.log(`[DIAG] buttons visible:`, visibleButtons.slice(0, 5).map(b => ({
-    text: (b.innerText || b.textContent || '').trim().substring(0, 30),
-    ariaLabel: b.getAttribute('aria-label') || 'none',
-    testid: b.getAttribute('data-testid') || 'none',
-    disabled: b.disabled
-  })));
+  console.log(`[DIAG] buttons to score: ${buttonsToScore.length} (visible: ${visibleButtons.length})`);
   
   // Step 3: 텍스트 키워드 점수화
   const candidates = [];
-  for (const btn of visibleButtons) {
+  for (const btn of buttonsToScore) {
     const text = (btn.innerText || btn.textContent || '').trim();
     const ariaLabel = (btn.getAttribute('aria-label') || '').trim();
     const dataTestId = (btn.getAttribute('data-testid') || '').trim();
@@ -167,18 +167,17 @@ export async function clickSubmitWithConfirmation(onAfterConfirmClick) {
   candidates.sort((a, b) => b.score - a.score);
   
   if (candidates.length === 0) {
-    console.error('[SUBMIT] 제출 버튼을 찾을 수 없습니다.');
-    console.error('[DIAG] satRoot snippet:', satRoot?.innerText?.slice(0, 500));
-    return false;
+    console.log('[SUBMIT] 제출 버튼 없음 — 즉시 채점 경로로 간주, grading 대기로 진행');
+    return true;
   }
   
   const submitButton = candidates[0].button;
   console.log(`[SUBMIT] 제출 버튼 발견: "${candidates[0].text}" (점수: ${candidates[0].score})`);
   
-  // 제출 버튼 클릭
-  console.log('[SUBMIT] 제출 버튼 클릭');
-  submitButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  await new Promise(resolve => setTimeout(resolve, 10));
+  // 제출 버튼 클릭 (화면 밖이어도 scrollIntoView 후 클릭)
+  console.log('[SUBMIT] 제출 버튼 scrollIntoView 후 클릭');
+  submitButton.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+  await new Promise(resolve => setTimeout(resolve, 80));
   submitButton.click();
   await waitForContentLoad(120);
   
@@ -422,7 +421,7 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
       clickCount++;
       clickPerformed = true;
       console.log(`[NEXT-DEBUG] ✓ Next 버튼 클릭 완료: click() 메서드 사용, callId=${callId}, clickCount=${clickCount}`);
-      await new Promise(resolve => setTimeout(resolve, 120)); // 클릭 후 UI 반영 대기(과속 클릭 방지)
+      await new Promise(resolve => setTimeout(resolve, 50)); // 클릭 후 UI 반영 대기
     } catch (e) {
       console.warn('[SAT-DEBUG] click() 메서드 실패, dispatchEvent 폴백 시도:', e);
       clickPerformed = false;
@@ -621,16 +620,22 @@ export async function clickNextButtonWithFallback(beforeProblemNum) {
   return false;
 }
 
-// 선지 강제 클릭 (Interaction 강화) - extractChoices 결과 재사용
-export async function clickFirstChoice(sectionType = 'reading') {
+// 선지 강제 클릭. root는 moduleRunner에서 전달만 사용. findSatRoot/document.body 금지.
+export async function clickFirstChoice(sectionType = 'reading', container = null) {
   console.log('[CHOICE] 선지 클릭 단계 시작');
+  if (!container || !container.querySelectorAll) {
+    const err = new Error('clickFirstChoice: root required (pass root from moduleRunner)');
+    err.code = 'NO_ROOT';
+    throw err;
+  }
+  const root = container;
   
   // 수학 섹션 예외 처리: 주관식 입력창 최우선 탐색
   if (sectionType === 'math') {
     console.log('[SAT-DEBUG] 수학 섹션 - 주관식 입력창 우선 탐색');
     // 주관식 입력창 찾기 (Shadow DOM 포함) - "여기에 입력하세요" 등 다양한 placeholder 지원
     const combinedSel = 'input[type="number"], input[type="text"][inputmode="numeric"], input[type="text"][pattern*="[0-9]"], input[placeholder*="입력"], input[placeholder*="여기에"], input[placeholder*="Enter"], textarea[placeholder*="입력"], textarea[placeholder*="여기에"], input[type="text"], textarea';
-    const allInputs = deepQuerySelectorAll(combinedSel, document.body);
+    const allInputs = deepQuerySelectorAll(combinedSel, root);
     // 채팅/메시지 입력창 제외, 문제 영역 또는 placeholder 있는 입력 우선
     const numberInputs = allInputs.filter(inp => {
       const plc = (inp.getAttribute('placeholder') || '').toLowerCase();
@@ -680,28 +685,53 @@ export async function clickFirstChoice(sectionType = 'reading') {
       return true;
     }
   }
-  
+
+  // SAT UI 첫 선지 직접 클릭 (선지는 mat-action-list.choices-container 내 button)
+  const firstOptionBtn = root.querySelector('mat-action-list.choices-container button');
+  if (firstOptionBtn) {
+    const before = firstOptionBtn.className;
+    firstOptionBtn.click();
+    await new Promise(r => setTimeout(r, 150));
+    const after = firstOptionBtn.className;
+    console.log('[CLICK-DEBUG]', { before, after });
+    if (after !== before || /answered|selected/.test(after)) return true;
+  }
+
   // ============================================================================
   // extractChoices 결과 재사용 (같은 후보 리스트로 찾기+클릭 일원화)
   // ============================================================================
-  const { extractChoices } = await import('../dom/extract.js');
-  console.log('[CHOICE] extractChoices() 호출하여 선택지 후보 가져오기...');
-  
-  // extractChoices는 document.body를 container로 받아서 전체 탐색
-  const extractedChoices = extractChoices(document.body);
-  console.log(`[CHOICE] extractChoices 결과: ${extractedChoices.length}개 선택지 발견`);
-  
+  const { extractChoices, ensureChoicesPresent } = await import('../dom/extract.js');
+  const problemNum = (typeof getCurrentProblemNumber === 'function') ? getCurrentProblemNumber() : null;
+  if (sectionType === 'reading') {
+    const choicesReady = await waitForCondition(() => {
+      try { return extractChoices(root).length >= 4; } catch (_) { return false; }
+    }, 5000, 150);
+    if (!choicesReady) console.warn('[CHOICE-CLICK] 리딩: 5초 내 선지 4개 미등장, ensureChoicesPresent 시도');
+  }
+  await ensureChoicesPresent(root);
+  let extractedChoices;
+  try {
+    extractedChoices = extractChoices(root);
+  } catch (e) {
+    if (e?.code === 'CHOICES_NOT_FOUND') throw e;
+    throw e;
+  }
+  if (!extractedChoices || extractedChoices.length === 0) {
+    const snippetCount = root.querySelectorAll?.('mat-action-list.choices-container button, .mat-mdc-radio-button, [role="radio"], mat-list-option')?.length ?? 0;
+    const err = new Error(`NO_CHOICES_EXTRACTED problem=${problemNum ?? '?'} snippetCount=${snippetCount}`);
+    err.code = 'NO_CHOICES_EXTRACTED';
+    throw err;
+  }
+  extractedChoices = extractedChoices.filter(c => c && c.element);
   if (extractedChoices.length === 0) {
-    console.error('[CHOICE] extractChoices가 선택지를 찾지 못했습니다.');
+    console.error('[CHOICE] element가 있는 선택지가 없습니다.');
     return false;
   }
-  
-  // extractChoices 결과를 candidates로 변환
-  // 텍스트 기반 폴백 후보는 선택 여부를 알 수 없으므로 무조건 클릭 가능한 것으로 처리
+  // 후보 변환: visible 필터 제거 (fold 아래 선지는 scrollIntoView 직전에 보이게 함)
   const candidates = extractedChoices
     .filter(choice => {
       const el = choice.element;
-      if (!el || !isElementVisible(el) || el.disabled) return false;
+      if (!el || el.disabled) return false;
       
       // 텍스트 기반 폴백(source === '텍스트 기반 폴백' 또는 priority === 5)은 선택 여부 체크 스킵
       const isTextFallback = choice.source === '텍스트 기반 폴백' || choice.priority === 5;
@@ -770,113 +800,207 @@ export async function clickFirstChoice(sectionType = 'reading') {
   }).filter(c => c.isClickable);
   
   if (clickTargets.length === 0) {
-    console.error('[CHOICE] 클릭 가능한 타겟이 없습니다.');
-    return false;
+    const snippetCount = document.querySelectorAll?.('.mat-mdc-radio-button, [role="radio"], input[type="radio"], mat-list-option')?.length ?? 0;
+    const err = new Error(`NO_CHOICES_EXTRACTED problem=${problemNum ?? '?'} candidates=${candidates.length} but clickTargets=0 snippetCount=${snippetCount}`);
+    err.code = 'NO_CHOICES_EXTRACTED';
+    throw err;
   }
   
-  // 첫 번째 선택지 클릭 시도 (A 우선, 없으면 첫 번째)
   const firstChoice = clickTargets.find(c => c.letter === 'A') || clickTargets[0];
-  const targetElement = firstChoice.element;
-  
-  console.log(`[CHOICE] picked candidate text="${firstChoice.text.substring(0, 30)}", letter=${firstChoice.letter}`);
-  
-  // 클릭 전 상태 확인 (className 중심)
-  const beforeClass = targetElement.className;
-  const beforeAriaDisabled = targetElement.getAttribute('aria-disabled');
-  const beforeDisabled = targetElement.disabled;
-  console.log(`[CHOICE] state before:`, {
-    className: beforeClass,
-    ariaDisabled: beforeAriaDisabled,
-    disabled: beforeDisabled
-  });
-  
-  // 클릭 시퀀스: scrollIntoView → pointerdown → mousedown → mouseup → click
-  try {
-    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await new Promise(resolve => setTimeout(resolve, 30));
-    
-    // pointerdown
-    targetElement.dispatchEvent(new PointerEvent('pointerdown', {
-      bubbles: true,
-      cancelable: true,
-      pointerId: 1
-    }));
-    await new Promise(resolve => setTimeout(resolve, 10));
-    
-    // mousedown
-    targetElement.dispatchEvent(new MouseEvent('mousedown', {
-      bubbles: true,
-      cancelable: true,
-      buttons: 1
-    }));
-    await new Promise(resolve => setTimeout(resolve, 10));
-    
-    // mouseup
-    targetElement.dispatchEvent(new MouseEvent('mouseup', {
-      bubbles: true,
-      cancelable: true,
-      buttons: 1
-    }));
-    await new Promise(resolve => setTimeout(resolve, 10));
-    
-    // click
-    targetElement.click();
-    await new Promise(resolve => setTimeout(resolve, 25)); // 짧은 대기 후 상태 확인
-    
-    // 클릭 후 상태 확인
-    const afterClass = targetElement.className;
-    const afterAriaDisabled = targetElement.getAttribute('aria-disabled');
-    const afterDisabled = targetElement.disabled;
-    console.log(`[CHOICE] state after:`, {
-      className: afterClass,
-      ariaDisabled: afterAriaDisabled,
-      disabled: afterDisabled
-    });
-    
-    // 성공 판정: className 변화 또는 answered-* 클래스 등장 또는 disabled 상태
-    const classChanged = beforeClass !== afterClass;
-    const graded = /answered-(correct|incorrect)/.test(afterClass);
-    const disabledNow = afterClass.includes('mdc-list-item--disabled') ||
-                       afterAriaDisabled === 'true' ||
-                       afterDisabled ||
-                       (afterClass.includes('disabled') && !beforeClass.includes('disabled'));
-    
-    const clickSuccess = classChanged || graded || disabledNow;
-    
-    console.log(`[CHOICE] state changed? ${clickSuccess} (classChanged: ${classChanged}, graded: ${graded}, disabledNow: ${disabledNow})`);
-    
-    if (clickSuccess) {
-      console.log(`[CHOICE] ✓ 클릭 성공: 상태 변화 확인됨`);
-      return true;
-    } else {
-      console.warn(`[CHOICE] ✗ 클릭 실패: 상태 변화 없음. 다른 후보 시도...`);
-      
-      // 다른 후보로 재시도 (최대 2개까지)
-      for (let i = 1; i < Math.min(3, clickTargets.length); i++) {
-        const nextTarget = clickTargets[i];
-        console.log(`[CHOICE] 재시도 ${i}: ${nextTarget.letter} 선택`);
-        
-        const retryBeforeClass = nextTarget.element.className;
-        nextTarget.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await new Promise(resolve => setTimeout(resolve, 20));
-        nextTarget.element.click();
-        await new Promise(resolve => setTimeout(resolve, 25));
-        
-        const retryAfterClass = nextTarget.element.className;
-        const retryGraded = /answered-(correct|incorrect)/.test(retryAfterClass);
-        const retryDisabled = retryAfterClass.includes('mdc-list-item--disabled') ||
-                              nextTarget.element.getAttribute('aria-disabled') === 'true' ||
-                              nextTarget.element.disabled;
-        
-        if (retryBeforeClass !== retryAfterClass || retryGraded || retryDisabled) {
-          console.log(`[CHOICE] ✓ 재시도 성공: ${nextTarget.letter}`);
-          return true;
-        }
+  const rawElement = firstChoice.element;
+  const candidatesToTry = [rawElement, ...clickTargets.slice(1).map(c => c.element)];
+
+  function isSelectionVerified(el) {
+    if (!el) return false;
+    const root = el.closest('[role="group"], [class*="list"], [class*="option"], [class*="choice"]') || el;
+    const check = (n) => {
+      if (!n) return false;
+      if (n.getAttribute('aria-checked') === 'true' || n.getAttribute('aria-selected') === 'true') return true;
+      if (n.type === 'radio' && n.checked) return true;
+      if (n.getAttribute('data-selected') === 'true' || n.getAttribute('data-checked') === 'true') return true;
+      const c = (n.className || '') + ' ' + (n.getAttribute('class') || '');
+      if (/\bselected\b|\bchecked\b|mdc-list-item--selected|mat-list-option-selected|mdc-radio--selected|answered-(correct|incorrect)/.test(c)) return true;
+      return false;
+    };
+    const nodes = [el, root, ...Array.from((root.querySelectorAll && root.querySelectorAll('[role="radio"], [role="option"], input[type="radio"], .mdc-radio, .mat-mdc-list-option')) || [])];
+    return nodes.some(check);
+  }
+  function resolveClickable(el) {
+    const isClickable = (n) => {
+      if (!n || n.disabled) return false;
+      const r = n.getAttribute('role');
+      if (r === 'radio' || r === 'option') return true;
+      if (n.tagName === 'LABEL') return true;
+      if (n.querySelector && n.querySelector('input[type="radio"]')) return true;
+      if (n.tagName === 'BUTTON') return true;
+      const c = (n.className || '') + '';
+      if (/\blist-item\b|\boption\b|mat-mdc-list-option|mat-mdc-radio-button|mat-radio-button/.test(c)) return true;
+      return false;
+    };
+    let p = el;
+    while (p && p !== document.body) {
+      if (isClickable(p)) return p;
+      const child = p.querySelector && p.querySelector('[role="radio"], [role="option"], button, label, .mdc-list-item__content, .mdc-radio, .mat-mdc-list-item, .mat-mdc-radio-button, .mat-radio-button');
+      if (child && el.contains(child)) return child;
+      p = p.parentElement;
+    }
+    return el;
+  }
+  function getScrollableParent(el) {
+    let p = el && el.parentElement;
+    while (p) {
+      try {
+        const style = window.getComputedStyle(p);
+        if (/(auto|scroll|overlay)/.test(style.overflowY || '') && p.scrollHeight > p.clientHeight) return p;
+      } catch (_) {}
+      p = p.parentElement;
+    }
+    return null;
+  }
+  function scrollIntoViewWithinParent(el) {
+    const parent = getScrollableParent(el);
+    if (!parent) { el.scrollIntoView({ block: 'center' }); return; }
+    const er = el.getBoundingClientRect();
+    const pr = parent.getBoundingClientRect();
+    parent.scrollTop += (er.top + er.height / 2) - (pr.top + pr.height / 2);
+  }
+  function waitFrames(n = 2) {
+    return new Promise(r => {
+      let count = 0;
+      function tick() {
+        requestAnimationFrame(() => { count++; if (count >= n) r(); else tick(); });
       }
-      
-      console.error(`[CHOICE] ✗ 모든 후보 클릭 실패`);
+      tick();
+    });
+  }
+  function ensureCenterInViewport(el) {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const bounds = satRoot ? satRoot.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    const right = bounds.left + bounds.width, bottom = bounds.top + bounds.height;
+    if (cx < bounds.left || cx > right || cy < bounds.top || cy > bottom) {
+      scrollIntoViewWithinParent(el);
       return false;
     }
+    return true;
+  }
+
+  const MIN_RECT_SIZE = 5;
+
+  function safeClickGuard(cx, cy, satRootRef, context) {
+    const topEl = document.elementFromPoint(cx, cy);
+    if (!topEl) {
+      console.warn('[SAFECLICK] blocked click: no element at point', { cx, cy, ...context });
+      return { ok: false, reason: 'NO_ELEMENT', topEl: null };
+    }
+    if (satRootRef && !satRootRef.contains(topEl)) {
+      const href = topEl.tagName === 'A' ? topEl.getAttribute('href') : (topEl.closest?.('a')?.getAttribute('href') || null);
+      console.warn('[SAFECLICK] blocked click outside satRoot', { cx, cy, topElTag: topEl.tagName, href, ...context });
+      return { ok: false, reason: 'OUTSIDE_SATROOT', topEl };
+    }
+    return { ok: true, topEl };
+  }
+
+  async function attemptClickWithStrategy(choiceEl, strategy) {
+    const clickable = resolveClickable(choiceEl);
+    scrollIntoViewWithinParent(choiceEl);
+    await waitFrames(2);
+    ensureCenterInViewport(choiceEl);
+    await new Promise(r => setTimeout(r, 30));
+
+    const r = clickable.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+
+    const rectInvalid = typeof r.width !== 'number' || typeof r.height !== 'number' ||
+      Number.isNaN(r.width) || Number.isNaN(r.height) ||
+      r.width < MIN_RECT_SIZE || r.height < MIN_RECT_SIZE;
+    if (rectInvalid) {
+      console.warn('[SAFECLICK] BAD_RECT: abort click', { width: r.width, height: r.height, strategy });
+      return false;
+    }
+
+    const topEl = document.elementFromPoint(cx, cy);
+    const isOptionOrChild = topEl && (choiceEl.contains(topEl) || topEl.contains(choiceEl));
+
+    const guard = safeClickGuard(cx, cy, satRoot, { strategy });
+    if (!guard.ok) {
+      if (guard.reason === 'OUTSIDE_SATROOT') return false;
+      if (guard.reason === 'NO_ELEMENT') return false;
+    }
+
+    if (strategy === 'A') {
+      if (satRoot && !satRoot.contains(clickable)) {
+        console.warn('[SAFECLICK] strategy A: clickable outside satRoot, skip click');
+        return false;
+      }
+      clickable.click();
+    } else if (strategy === 'B') {
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
+        clickable.dispatchEvent(new MouseEvent(type, {
+          bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy,
+          buttons: (type === 'mouseup' || type === 'click') ? 0 : 1
+        }));
+      });
+    } else if (strategy === 'C') {
+      if (topEl && !isOptionOrChild) {
+        const overlay = topEl;
+        const prev = overlay.style.pointerEvents;
+        overlay.style.pointerEvents = 'none';
+        void document.body.offsetHeight;
+        await new Promise(r => setTimeout(r, 20));
+        clickable.click();
+        await new Promise(r => setTimeout(r, 30));
+        overlay.style.pointerEvents = prev;
+      } else {
+        let ancestor = topEl || clickable;
+        while (ancestor && ancestor !== document.body) {
+          const role = ancestor.getAttribute('role');
+          if (role === 'radio' || role === 'option' || ancestor.tagName === 'LABEL' || ancestor.querySelector?.('input[type="radio"]')) {
+            ancestor.click();
+            break;
+          }
+          ancestor = ancestor.parentElement;
+        }
+        if (!ancestor || ancestor === document.body) clickable.click();
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 80));
+    let verified = isSelectionVerified(choiceEl);
+    if (!verified) {
+      for (let p = 0; p < 3; p++) {
+        await new Promise(r => setTimeout(r, 60));
+        verified = isSelectionVerified(choiceEl);
+        if (verified) break;
+      }
+    }
+    const signal = choiceEl.getAttribute('aria-checked') === 'true' ? 'aria-checked' :
+      choiceEl.getAttribute('aria-selected') === 'true' ? 'aria-selected' :
+      /answered-(correct|incorrect)|\bselected\b|\bchecked\b/.test(choiceEl.className || '') ? 'class' : '';
+    console.log(`[CHOICE-CLICK] strategy=${strategy} topEl=${topEl?.tagName || 'null'} isOptionOrChild=${isOptionOrChild} verified=${verified} signal=${signal || 'none'}`);
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/140f9222-33c1-4152-a733-b0541fa57bde',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'buttons.js:attemptClickWithStrategy',message:'choice click attempt',data:{strategy,topElTag:topEl?.tagName||'null',isOptionOrChild,verified,signal:signal||'none'},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    return verified;
+  }
+
+  try {
+    for (let cIdx = 0; cIdx < Math.min(3, candidatesToTry.length); cIdx++) {
+      const choiceEl = candidatesToTry[cIdx];
+      const letter = clickTargets[cIdx]?.letter || ['A','B','C','D'][cIdx];
+      console.log(`[CHOICE] attempt ${cIdx + 1} letter=${letter}`);
+      for (const strat of ['A', 'B', 'C']) {
+        const ok = await attemptClickWithStrategy(choiceEl, strat);
+        if (ok) {
+          console.log(`[CHOICE] ✓ 선택 성공 (strategy=${strat} letter=${letter})`);
+          return true;
+        }
+        await new Promise(r => setTimeout(r, 50));
+      }
+    }
+    console.error('[CHOICE] ✗ 모든 전략 실패 - 선지 선택 확정 불가');
+    return false;
   } catch (error) {
     console.error('[CHOICE] 클릭 중 오류:', error);
     return false;

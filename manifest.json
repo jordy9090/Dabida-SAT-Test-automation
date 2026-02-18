@@ -3,12 +3,9 @@
   "name": "Gemini SAT PDF Exporter",
   "version": "1.0.0",
   "description": "Extract SAT problems and explanations from Google Gemini interface and export to PDF",
-  "permissions": [
-    "activeTab"
-  ],
-  "host_permissions": [
-    "https://gemini.google.com/*"
-  ],
+  "permissions": ["activeTab", "tabs"],
+  "host_permissions": ["https://gemini.google.com/*"],
+  "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
       "matches": ["https://gemini.google.com/*"],
@@ -19,10 +16,6 @@
     }
   ],
   "web_accessible_resources": [
-    {
-      "resources": ["styles.css"],
-      "matches": ["https://gemini.google.com/*"]
-    }
+    { "resources": ["styles.css"], "matches": ["https://gemini.google.com/*"] }
   ]
 }
-
