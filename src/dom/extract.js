@@ -5,6 +5,63 @@ import { deepQuerySelectorAll, isElementVisible } from './deepQuery.js';
 import { findSatRoot, readProgressNumber } from './query.js';
 
 // ============================================================================
+// 텍스트 정제: Gemini UI 아이콘/깨진 유니코드 제거 (모든 문제·Reading/Math 공통)
+// ============================================================================
+/** Æ$20, È 20, È ²õ, È 2õÇ...²Èzä! 등 — 보기/해설 옆 아이콘 폰트가 innerText에 섞여 나오는 패턴 */
+const GARBAGE_UNICODE_RE = /\s*[ÆÈ][\s\$²³õö0-9Çäz!]{0,35}\s*/g;
+
+export function stripGarbageUnicode(str) {
+  if (str == null || typeof str !== 'string') return '';
+  return str.replace(GARBAGE_UNICODE_RE, ' ').replace(/\s{2,}/g, ' ').trim();
+}
+
+// ============================================================================
+// LaTeX → PDF/텍스트용 읽기 가능 문자열 (수식 깨짐 방지)
+// ============================================================================
+function latexToReadable(latex) {
+  if (!latex || typeof latex !== 'string') return '';
+  return latex
+    .replace(/\\frac\s*\{\s*([^}]+)\s*\}\s*\{\s*([^}]+)\s*\}/g, '($1)/($2)')
+    .replace(/\\sqrt\s*\{\s*([^}]+)\s*\}/g, '√($1)')
+    .replace(/\\sqrt\s*([^\s\{\\]+)/g, '√$1')
+    .replace(/\\\^\s*\{\s*([^}]+)\s*\}/g, '^($1)')
+    .replace(/\\\^\s*\(/g, '^(')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\times/g, '×')
+    .replace(/\\div/g, '÷')
+    .replace(/\\pm/g, '±')
+    .replace(/\\text\s*\{\s*([^}]*)\s*\}/g, '$1')
+    .replace(/\\left|\\right/g, '')
+    .replace(/\\\(|\\\)|\\\[|\\\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 노드 트리에서 텍스트 + [data-math] LaTeX를 순서대로 읽기 가능 문자열로 결합 (수식 줄바꿈/깨짐 방지) */
+function getTextWithMathFromNode(container) {
+  if (!container || !container.childNodes) return '';
+  const parts = [];
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = (node.textContent || '').trim();
+      if (t) parts.push(t);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node;
+    const dataMath = el.getAttribute && el.getAttribute('data-math');
+    if (dataMath) {
+      const readable = latexToReadable(dataMath);
+      if (readable) parts.push(readable);
+      return;
+    }
+    for (let i = 0; i < el.childNodes.length; i++) walk(el.childNodes[i]);
+  }
+  walk(container);
+  return parts.join(' ').replace(/\s{2,}/g, ' ').trim();
+}
+
+// ============================================================================
 // Figure 추출 유틸리티 함수들
 // ============================================================================
 
@@ -1068,7 +1125,7 @@ export function extractChoices(container) {
       const el = list[i];
       const L = ['A', 'B', 'C', 'D'][i];
       const raw = (el.innerText || el.textContent || '').trim();
-      const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim() || raw;
+      const text = stripGarbageUnicode(raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim() || raw);
       result.push({ label: L, text, element: el, priority: -2, source: 'sat-ui' });
     }
     return result;
@@ -1096,7 +1153,7 @@ export function extractChoices(container) {
     if (seen.has(L)) continue;
     seen.add(L);
     const raw = (el.innerText || el.textContent || '').trim();
-    const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim() || raw;
+    const text = stripGarbageUnicode(raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim() || raw);
     result.push({ label: L, text, element: el, priority: -2, source: 'sat-ui' });
   }
   if (result.length < 4) {
@@ -1161,7 +1218,8 @@ function extractChoicesLegacy(container) {
     return ['A', 'B', 'C', 'D'][idx] ?? null;
   }
   function extractOptionText(el) {
-    const raw = ((el && (el.innerText || el.textContent)) || '').trim();
+    let raw = ((el && (el.innerText || el.textContent)) || '').trim();
+    raw = stripGarbageUnicode(raw);
     const cleaned = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, '').trim();
     if (cleaned) return cleaned;
     const aria = (el && el.getAttribute && el.getAttribute('aria-label')) || '';
@@ -1261,7 +1319,7 @@ function extractChoicesLegacy(container) {
     }
     
     if (choiceLetter && choiceLetter >= 'A' && choiceLetter <= 'D') {
-      const choiceText = text.replace(/^[A-D][\.\)]\s*/, '').trim() || ariaLabel || '선택지';
+      const choiceText = stripGarbageUnicode(text.replace(/^[A-D][\.\)]\s*/, '').trim() || ariaLabel || '선택지');
       
       // 중복 방지
       if (!candidates.find(c => c.label === choiceLetter && c.element === el)) {
@@ -1317,7 +1375,7 @@ function extractChoicesLegacy(container) {
       }
       
       if (choiceLetter && choiceLetter >= 'A' && choiceLetter <= 'D') {
-        const choiceText = text.replace(/^[A-D][\.\)]\s*/, '').trim() || '선택지';
+        const choiceText = stripGarbageUnicode(text.replace(/^[A-D][\.\)]\s*/, '').trim() || '선택지');
         const targetElement = labelEl || input;
         
         if (!candidates.find(c => c.element === targetElement)) {
@@ -1362,7 +1420,7 @@ function extractChoicesLegacy(container) {
       }
       
       if (choiceLetter && choiceLetter >= 'A' && choiceLetter <= 'D') {
-        const choiceText = text.replace(/^[A-D][\.\)]\s*/, '').trim() || ariaLabel || '선택지';
+        const choiceText = stripGarbageUnicode(text.replace(/^[A-D][\.\)]\s*/, '').trim() || ariaLabel || '선택지');
         
         if (!candidates.find(c => c.label === choiceLetter && c.element === el)) {
           candidates.push({
@@ -1406,7 +1464,7 @@ function extractChoicesLegacy(container) {
       }
       
       if (choiceLetter && choiceLetter >= 'A' && choiceLetter <= 'D') {
-        const choiceText = text.replace(/^[A-D][\.\)]\s*/, '').trim() || ariaLabel || '선택지';
+        const choiceText = stripGarbageUnicode(text.replace(/^[A-D][\.\)]\s*/, '').trim() || ariaLabel || '선택지');
         
         if (!candidates.find(c => c.label === choiceLetter && c.element === el)) {
           candidates.push({
@@ -1508,7 +1566,7 @@ function extractChoicesLegacy(container) {
         existingLetters.add(choiceLetter);
         candidates.push({
           label: choiceLetter,
-          text: text.replace(/^[A-D][\.\)]\s*/i, '').trim() || ariaLabel || '선택지',
+          text: stripGarbageUnicode(text.replace(/^[A-D][\.\)]\s*/i, '').trim() || ariaLabel || '선택지'),
           element: el,
           priority: 5,
           source: '옵션 셀렉터 텍스트 폴백'
@@ -1624,7 +1682,7 @@ function extractChoicesLegacy(container) {
         if (lineMatch) m = [rawText, lineMatch[1], rawText.slice(firstLine.length).trim() || lineMatch[2]];
       }
       if (!m || m[1] < 'A' || m[1] > 'D' || seenLabels.has(m[1])) continue;
-      const rest = (m[2] || '').trim();
+      const rest = stripGarbageUnicode((m[2] || '').trim());
       if (/[B-D][\.\)]/.test(rest)) continue;
       seenLabels.add(m[1]);
       choices.push({
@@ -1805,14 +1863,32 @@ export async function extractCurrentProblem(sectionType) {
   // 선택지 추출 (A-D만). root 기준만 사용.
   const rootForExtract = await getRootForExtract();
   const choicesArray = rootForExtract ? extractChoicesSafe(rootForExtract) : [];
-  
+
   // choices를 {A: \"...\", B: \"...\", C: \"...\", D: \"...\"} 형태로 변환
   const choices = {};
   for (const choice of choicesArray) {
     if (choice.label >= 'A' && choice.label <= 'D') {
-      choices[choice.label] = choice.text;
+      let text = choice.text;
+      // Math: 선택지에 [data-math]가 있으면 LaTeX→읽기 가능 문자열로 수식 깨짐 방지
+      if (sectionType === 'math' && choice.element && choice.element.querySelector && choice.element.querySelector('[data-math]')) {
+        const withMath = getTextWithMathFromNode(choice.element);
+        if (withMath) text = stripGarbageUnicode(withMath);
+      }
+      choices[choice.label] = text;
     }
   }
+
+  // Math 섹션: [data-math] LaTeX가 있으면 수식 깨짐 방지를 위해 LaTeX→읽기 가능 문자열로 문제 본문 보강
+  if (sectionType === 'math' && rootForExtract && rootForExtract.querySelector && rootForExtract.querySelector('[data-math]')) {
+    const withMath = getTextWithMathFromNode(rootForExtract);
+    const beforeChoices = withMath.split(/\s*[A-D]\s*[\.\)]\s*/)[0].trim();
+    if (beforeChoices && beforeChoices.length > 15) {
+      problemText = stripGarbageUnicode(beforeChoices);
+    }
+  }
+
+  // 유니코드 쓰레기 패턴 제거 (Reading/Math 공통)
+  problemText = stripGarbageUnicode(problemText);
   
   // ============================================================================
   // STEP 2: questionText 비어 있을 때 placeholder 처리
@@ -2937,7 +3013,7 @@ export function extractExplanationAfterGrading(correctAnswer = null, expectedPro
         
         // 선택지 텍스트 제거
         explanationText = explanationText.replace(/^[A-D][\.\)]\s*[^\n]*/gm, '').trim();
-        const cleaned = explanationText.replace(/\s+/g, ' ').trim();
+        const cleaned = stripGarbageUnicode(explanationText.replace(/\s+/g, ' ').trim());
         
         if (cleaned.length > 10) {
           foundExplanations.push({ selector, text: cleaned });
@@ -2954,7 +3030,7 @@ export function extractExplanationAfterGrading(correctAnswer = null, expectedPro
     const explanationProgress = getProgressState();
     fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'extract.js:extractExplanationAfterGrading:explanationFoundFallback',message:'explanation found via fallback',data:{correctAnswer,explanationProblemNum,explanationProgress,currentProblemNum,foundCount:foundExplanations.length,explanationPreview:foundExplanations[0].text.substring(0,100),explanationLength:foundExplanations[0].text.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
     // #endregion
-    return foundExplanations[0].text;
+    return stripGarbageUnicode(foundExplanations[0].text);
   }
   
   // 폴백: 초록/빨강 박스 근처에서 찾기 (satRoot 내부에서만)

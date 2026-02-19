@@ -77,69 +77,79 @@ export class GeminiChatAutomator {
   }
 
   /**
-   * 채팅 입력창 찾기 (우선순위: data-testid/role → aria-label/placeholder → 전체 스캔)
+   * 채팅 입력창 찾기 (top + iframe 검색, 입력창 로드 대기 포함)
    * @returns {Promise<HTMLElement|null>}
    */
   async findChatInput() {
     console.log('[GeminiChat] 입력창 찾기 시작...');
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'geminiChat.js:findChatInput:entry',message:'findChatInput entry',data:{},timestamp:Date.now(),runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-    
-    // 1순위: data-testid, role 기반 셀렉터
-    for (const selector of CONFIG.geminiChat.inputSelectors.slice(0, 4)) {
-      const elements = deepQuerySelectorAll(selector);
-      for (const el of elements) {
-        if (isElementVisible(el) && !el.disabled && !el.readOnly) {
-          console.log('[GeminiChat] 입력창 발견 (1순위):', selector, el);
-          // #region agent log
-          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'geminiChat.js:findChatInput:found1',message:'input found tier1',data:{selector,tagName:el.tagName,hasValue:!!el.value,contentEditable:el.contentEditable},timestamp:Date.now(),runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-          // #endregion
-          return el;
+    const roots = [document];
+    try {
+      if (window.top && window.top.document && window.top.document !== document) {
+        roots.unshift(window.top.document);
+      }
+      if (window.top && window.top.frames) {
+        for (let i = 0; i < window.top.frames.length; i++) {
+          try {
+            const fr = window.top.frames[i];
+            if (fr.document && fr.document !== document && !roots.includes(fr.document)) roots.push(fr.document);
+          } catch (_) {}
         }
       }
-    }
-    
-    // 2순위: aria-label, placeholder 기반
-    for (const selector of CONFIG.geminiChat.inputSelectors.slice(4)) {
-      const elements = deepQuerySelectorAll(selector);
-      for (const el of elements) {
-        const isEditable = el.contentEditable === 'true' || (!el.disabled && el.readOnly !== true);
-        if (isElementVisible(el) && isEditable) {
-          const placeholder = (el.getAttribute('placeholder') || '').toLowerCase();
-          const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
-          const title = (el.getAttribute('title') || '').toLowerCase();
-          const matches = placeholder.includes('message') || placeholder.includes('prompt') || placeholder.includes('chat') || placeholder.includes('입력') ||
-              placeholder.includes('물어보기') || placeholder.includes('ask') ||
-              ariaLabel.includes('message') || ariaLabel.includes('prompt') || ariaLabel.includes('chat') || ariaLabel.includes('입력') ||
-              ariaLabel.includes('물어보기') || ariaLabel.includes('ask') ||
-              title.includes('message') || title.includes('prompt') || title.includes('chat') || title.includes('물어보기');
-          if (matches) {
-            console.log('[GeminiChat] 입력창 발견 (2순위):', selector, el);
+    } catch (_) {}
+
+    const searchInRoot = (root) => {
+      for (const selector of CONFIG.geminiChat.inputSelectors.slice(0, 4)) {
+        const elements = deepQuerySelectorAll(selector, root);
+        for (const el of elements) {
+          if (isElementVisible(el) && !el.disabled && el.readOnly !== true) {
+            console.log('[GeminiChat] 입력창 발견 (1순위):', selector, el);
             return el;
           }
         }
       }
-    }
-    
-    // 3순위: textarea, input, contenteditable 전체 스캔 (최후의 fallback)
-    const allInputs = deepQuerySelectorAll('textarea, input[type="text"], [contenteditable="true"]');
-    for (const el of allInputs) {
-      if (isElementVisible(el) && (el.disabled === false || el.disabled === undefined) && el.readOnly !== true) {
-        const rect = el.getBoundingClientRect();
-        if (rect.bottom > window.innerHeight * 0.5) {
-          console.log('[GeminiChat] 입력창 발견 (3순위 - 전체 스캔):', el);
-          // #region agent log
-          fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'geminiChat.js:findChatInput:found3',message:'input found tier3',data:{tagName:el.tagName,contentEditable:el.contentEditable,rectBottom:rect.bottom,innerHeight:window.innerHeight},timestamp:Date.now(),runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-          // #endregion
-          return el;
+      for (const selector of CONFIG.geminiChat.inputSelectors.slice(4)) {
+        const elements = deepQuerySelectorAll(selector, root);
+        for (const el of elements) {
+          const isEditable = el.contentEditable === 'true' || (!el.disabled && el.readOnly !== true);
+          if (isElementVisible(el) && isEditable) {
+            const placeholder = (el.getAttribute('placeholder') || '').toLowerCase();
+            const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+            const title = (el.getAttribute('title') || '').toLowerCase();
+            const matches = placeholder.includes('message') || placeholder.includes('prompt') || placeholder.includes('chat') || placeholder.includes('입력') ||
+                placeholder.includes('물어보기') || placeholder.includes('ask') ||
+                ariaLabel.includes('message') || ariaLabel.includes('prompt') || ariaLabel.includes('chat') || ariaLabel.includes('입력') ||
+                ariaLabel.includes('물어보기') || ariaLabel.includes('ask') ||
+                title.includes('message') || title.includes('prompt') || title.includes('chat') || title.includes('물어보기');
+            if (matches) {
+              console.log('[GeminiChat] 입력창 발견 (2순위):', selector, el);
+              return el;
+            }
+          }
         }
       }
+      const allInputs = deepQuerySelectorAll('textarea, input[type="text"], [contenteditable="true"]', root);
+      for (const el of allInputs) {
+        if (isElementVisible(el) && (el.disabled === false || el.disabled === undefined) && el.readOnly !== true) {
+          const rect = el.getBoundingClientRect();
+          const win = root.defaultView || window;
+          if (rect.bottom > (win.innerHeight || 400) * 0.4) {
+            console.log('[GeminiChat] 입력창 발견 (3순위):', el);
+            return el;
+          }
+        }
+      }
+      return null;
+    };
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      for (const root of roots) {
+        try {
+          const found = searchInRoot(root);
+          if (found) return found;
+        } catch (_) {}
+      }
+      if (attempt < 29) await new Promise(r => setTimeout(r, 500));
     }
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'geminiChat.js:findChatInput:notFound',message:'input not found',data:{allInputsCount:allInputs.length},timestamp:Date.now(),runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     console.warn('[GeminiChat] 입력창을 찾을 수 없습니다.');
     return null;
   }
@@ -154,6 +164,9 @@ export class GeminiChatAutomator {
     // #region agent log
     fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'geminiChat.js:typeMessage:entry',message:'typeMessage entry',data:{messageLen:message?.length},timestamp:Date.now(),runId:'run1',hypothesisId:'C'})}).catch(()=>{});
     // #endregion
+
+    // 입력창 로드 대기 (Gemini 초기 렌더 후 프롬프트창이 나타날 때까지)
+    await new Promise(resolve => setTimeout(resolve, 800));
     
     const input = await this.findChatInput();
     if (!input) {
@@ -166,37 +179,60 @@ export class GeminiChatAutomator {
     // #endregion
     
     try {
-      // 입력창에 포커스
       input.focus();
-      await new Promise(resolve => setTimeout(resolve, 120));
+      input.click();
+      await new Promise(resolve => setTimeout(resolve, 200));
       
-      // 기존 내용 지우기
-      if (input.value) {
-        input.value = '';
-        input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-      }
       if (input.contentEditable === 'true') {
         input.textContent = '';
         input.innerHTML = '';
-        input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'deleteContentForward' }));
+      } else if (input.value !== undefined) {
+        input.value = '';
       }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 80));
+
+      try {
+        const doc = input.ownerDocument || document;
+        const sel = doc.getSelection && doc.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          const range = doc.createRange();
+          range.selectNodeContents(input);
+          if (input.firstChild) range.collapse(true);
+          sel.addRange(range);
+        }
+        if (typeof doc.execCommand === 'function') {
+          doc.execCommand('insertText', false, message);
+        }
+      } catch (_) {}
       
-      // 텍스트 입력 (여러 방법 시도)
       if (input.contentEditable === 'true') {
-        input.textContent = message;
-        input.innerText = message;
-        input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: message }));
+        if (!input.textContent || !input.textContent.includes('SAT')) {
+          input.textContent = message;
+          input.innerText = message;
+          input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
       } else {
         input.value = message;
-        input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
       }
-      
-      // 키보드 이벤트도 시뮬레이션
-      const textarea = input.tagName === 'TEXTAREA' ? input : null;
-      if (textarea) {
-        textarea.value = message;
-        textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+
+      // 클립보드 붙여넣기 시도 (직접 입력이 반영되지 않는 경우)
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const afterDirect = input.contentEditable === 'true' ? (input.textContent || input.innerText || '') : (input.value || '');
+      if (!afterDirect.includes('SAT') && typeof navigator.clipboard?.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(message);
+          input.focus();
+          const doc = input.ownerDocument || document;
+          if (typeof doc.execCommand === 'function') {
+            doc.execCommand('paste');
+          }
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (_) {}
       }
       
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -206,8 +242,7 @@ export class GeminiChatAutomator {
       fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'geminiChat.js:typeMessage:afterSet',message:'value after set',data:{afterValue:afterValue?.slice(0,50),expectedMatch:afterValue?.includes('SAT')},timestamp:Date.now(),runId:'run1',hypothesisId:'C'})}).catch(()=>{});
       // #endregion
       
-      // 전송 버튼 찾기 및 클릭
-      const submitButton = await this.findSubmitButton();
+      const submitButton = await this.findSubmitButton(input.ownerDocument || document);
       if (submitButton) {
         console.log('[GeminiChat] 전송 버튼 클릭');
         await safeClick(submitButton);
@@ -228,12 +263,13 @@ export class GeminiChatAutomator {
   }
 
   /**
-   * 전송 버튼 찾기
+   * 전송 버튼 찾기 (입력창과 같은 document/iframe에서 검색)
+   * @param {Document} [root=document]
    * @returns {Promise<HTMLElement|null>}
    */
-  async findSubmitButton() {
+  async findSubmitButton(root = document) {
     for (const selector of CONFIG.geminiChat.submitSelectors) {
-      const buttons = deepQuerySelectorAll(selector);
+      const buttons = deepQuerySelectorAll(selector, root);
       for (const btn of buttons) {
         if (isElementVisible(btn) && !btn.disabled) {
           return btn;

@@ -40,6 +40,56 @@ function getJSPDF() {
   }
 }
 
+/** Gemini UI 아이콘/깨진 유니코드 — Æ$20, È 20, È ²õ, È 2õÇ...²Èzä! 등 (모든 문제 공통) */
+const GARBAGE_UNICODE_RE = /\s*[ÆÈ][\s\$²³õö0-9Çäz!]{0,35}\s*/g;
+
+/**
+ * PDF 출력 전 텍스트 정제: 불필요한 줄바꿈 축소, 아이콘/깨진 유니코드 제거
+ * @param {string} text - 원본 텍스트
+ * @returns {string} 정제된 텍스트
+ */
+function sanitizeForPDF(text) {
+  if (text == null || typeof text !== 'string') return '';
+  let s = text
+    .replace(/\r\n|\r/g, '\n')
+    .replace(/\n{2,}/g, '\n')                    // 연속 줄바꿈 → 하나로
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')       // zero-width 문자 제거
+    .replace(/[\uE000-\uF8FF]/g, '');            // Private Use Area (아이콘 폰트) 제거
+  s = s.replace(GARBAGE_UNICODE_RE, ' ');
+  // 1~6자 단독 줄(알파벳/숫자 없음) 제거 — 아이콘만 있는 줄
+  s = s.split('\n').filter(line => {
+    const t = line.trim();
+    if (t.length >= 1 && t.length <= 6 && !/[A-Za-z0-9]/.test(t)) return false;
+    return true;
+  }).join('\n');
+  // 수식 조각이 줄마다 나뉜 경우 한 줄로 합침 (예: "y=" "2" "x+3" → "y= 2 x+3")
+  const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
+  const merged = [];
+  let i = 0;
+  while (i < lines.length) {
+    const curr = lines[i];
+    const isShort = curr.length <= 3 && !/^[A-D][\.\)]\s*$/.test(curr);
+    if (isShort && i + 1 < lines.length) {
+      const next = lines[i + 1];
+      const nextShort = next.length <= 3 && !/^[A-D][\.\)]\s*$/.test(next);
+      if (nextShort) {
+        let combined = curr + ' ' + next;
+        i += 2;
+        while (i < lines.length && lines[i].length <= 3 && !/^[A-D][\.\)]\s*$/.test(lines[i])) {
+          combined += ' ' + lines[i];
+          i++;
+        }
+        merged.push(combined);
+        continue;
+      }
+    }
+    merged.push(curr);
+    i++;
+  }
+  s = merged.join('\n').replace(/\s{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim();
+  return s;
+}
+
 // 문제지용: 섹션을 PDF에 추가 (정답/해설 제외)
 function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, margin, pageHeight, lineHeight, sectionSpacing) {
   let yPosition = startY;
@@ -102,7 +152,7 @@ function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, m
     
     // 지문 (Reading의 경우)
     if (problem.passage) {
-      const passageLines = doc.splitTextToSize(problem.passage, maxWidth);
+      const passageLines = doc.splitTextToSize(sanitizeForPDF(problem.passage), maxWidth);
       passageLines.forEach(line => {
         if (yPosition + lineHeight > pageHeight - 20) {
           doc.addPage();
@@ -121,7 +171,7 @@ function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, m
     // ============================================================================
     let questionText = problem.question || problem.stem || '[QUESTION_NOT_EXTRACTED]';
     if (questionText && questionText.trim().length > 0) {
-      const questionLines = doc.splitTextToSize(questionText, maxWidth);
+      const questionLines = doc.splitTextToSize(sanitizeForPDF(questionText), maxWidth);
       questionLines.forEach(line => {
         if (yPosition + lineHeight > pageHeight - 20) {
           doc.addPage();
@@ -232,7 +282,7 @@ function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, m
             doc.addPage();
             yPosition = margin;
           }
-          const choiceText = `${choice.label}. ${choice.text}`;
+          const choiceText = `${choice.label}. ${sanitizeForPDF(choice.text || '')}`;
           const choiceLines = doc.splitTextToSize(choiceText, maxWidth - 10);
           choiceLines.forEach(line => {
             if (yPosition + lineHeight > pageHeight - 20) {
@@ -253,7 +303,7 @@ function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, m
               doc.addPage();
               yPosition = margin;
             }
-            const choiceText = `${label}. ${problem.choices[label]}`;
+            const choiceText = `${label}. ${sanitizeForPDF(problem.choices[label] || '')}`;
             const choiceLines = doc.splitTextToSize(choiceText, maxWidth - 10);
             choiceLines.forEach(line => {
               if (yPosition + lineHeight > pageHeight - 20) {
@@ -396,7 +446,7 @@ function addAnswersSectionToPDF(doc, sectionName, problems, startY, maxWidth, ma
       
       // 정답선지 텍스트가 있으면 병기
       if (answerText && answerText.trim().length > 0) {
-        const answerDisplay = `Answer: ${problem.correctAnswer} (${answerText.trim()})`;
+        const answerDisplay = `Answer: ${problem.correctAnswer} (${sanitizeForPDF(answerText).trim()})`;
         const answerLines = doc.splitTextToSize(answerDisplay, maxWidth);
         answerLines.forEach(line => {
           if (yPosition + lineHeight > pageHeight - 20) {
@@ -430,7 +480,7 @@ function addAnswersSectionToPDF(doc, sectionName, problems, startY, maxWidth, ma
       }
       
       if (answerText && answerText.trim().length > 0) {
-        const answerDisplay = `Answer: ${problem.answer} (${answerText.trim()})`;
+        const answerDisplay = `Answer: ${problem.answer} (${sanitizeForPDF(answerText).trim()})`;
         const answerLines = doc.splitTextToSize(answerDisplay, maxWidth);
         answerLines.forEach(line => {
           if (yPosition + lineHeight > pageHeight - 20) {
@@ -466,7 +516,7 @@ function addAnswersSectionToPDF(doc, sectionName, problems, startY, maxWidth, ma
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(80, 80, 80);
     if (problem.explanation && problem.explanation.trim().length > 0) {
-      const explanationText = `Explanation: ${problem.explanation}`;
+      const explanationText = `Explanation: ${sanitizeForPDF(problem.explanation)}`;
       const explanationLines = doc.splitTextToSize(explanationText, maxWidth);
       explanationLines.forEach(line => {
         if (yPosition + lineHeight > pageHeight - 20) {

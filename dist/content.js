@@ -8295,9 +8295,40 @@
     isModuleStartScreen: () => isModuleStartScreen,
     isQuestionScreen: () => isQuestionScreen,
     scrollScanForChoices: () => scrollScanForChoices,
+    stripGarbageUnicode: () => stripGarbageUnicode,
     waitForAnswerUIWithNextButtonCheck: () => waitForAnswerUIWithNextButtonCheck,
     waitForGrading: () => waitForGrading
   });
+  function stripGarbageUnicode(str) {
+    if (str == null || typeof str !== "string") return "";
+    return str.replace(GARBAGE_UNICODE_RE, " ").replace(/\s{2,}/g, " ").trim();
+  }
+  function latexToReadable(latex) {
+    if (!latex || typeof latex !== "string") return "";
+    return latex.replace(/\\frac\s*\{\s*([^}]+)\s*\}\s*\{\s*([^}]+)\s*\}/g, "($1)/($2)").replace(/\\sqrt\s*\{\s*([^}]+)\s*\}/g, "\u221A($1)").replace(/\\sqrt\s*([^\s\{\\]+)/g, "\u221A$1").replace(/\\\^\s*\{\s*([^}]+)\s*\}/g, "^($1)").replace(/\\\^\s*\(/g, "^(").replace(/\\cdot/g, "\xB7").replace(/\\times/g, "\xD7").replace(/\\div/g, "\xF7").replace(/\\pm/g, "\xB1").replace(/\\text\s*\{\s*([^}]*)\s*\}/g, "$1").replace(/\\left|\\right/g, "").replace(/\\\(|\\\)|\\\[|\\\]/g, "").replace(/\s+/g, " ").trim();
+  }
+  function getTextWithMathFromNode(container) {
+    if (!container || !container.childNodes) return "";
+    const parts = [];
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const t = (node.textContent || "").trim();
+        if (t) parts.push(t);
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const el = node;
+      const dataMath = el.getAttribute && el.getAttribute("data-math");
+      if (dataMath) {
+        const readable = latexToReadable(dataMath);
+        if (readable) parts.push(readable);
+        return;
+      }
+      for (let i = 0; i < el.childNodes.length; i++) walk(el.childNodes[i]);
+    }
+    walk(container);
+    return parts.join(" ").replace(/\s{2,}/g, " ").trim();
+  }
   function blobToDataURL(blob) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -9006,7 +9037,7 @@
         const el = list2[i];
         const L = ["A", "B", "C", "D"][i];
         const raw = (el.innerText || el.textContent || "").trim();
-        const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, "").trim() || raw;
+        const text = stripGarbageUnicode(raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, "").trim() || raw);
         result2.push({ label: L, text, element: el, priority: -2, source: "sat-ui" });
       }
       return result2;
@@ -9038,7 +9069,7 @@
       if (seen.has(L)) continue;
       seen.add(L);
       const raw = (el.innerText || el.textContent || "").trim();
-      const text = raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, "").trim() || raw;
+      const text = stripGarbageUnicode(raw.replace(/^\s*[A-D]\s*[\.\)]\s*/, "").trim() || raw);
       result.push({ label: L, text, element: el, priority: -2, source: "sat-ui" });
     }
     if (result.length < 4) {
@@ -9178,9 +9209,22 @@
     const choices = {};
     for (const choice of choicesArray) {
       if (choice.label >= "A" && choice.label <= "D") {
-        choices[choice.label] = choice.text;
+        let text = choice.text;
+        if (sectionType === "math" && choice.element && choice.element.querySelector && choice.element.querySelector("[data-math]")) {
+          const withMath = getTextWithMathFromNode(choice.element);
+          if (withMath) text = stripGarbageUnicode(withMath);
+        }
+        choices[choice.label] = text;
       }
     }
+    if (sectionType === "math" && rootForExtract && rootForExtract.querySelector && rootForExtract.querySelector("[data-math]")) {
+      const withMath = getTextWithMathFromNode(rootForExtract);
+      const beforeChoices = withMath.split(/\s*[A-D]\s*[\.\)]\s*/)[0].trim();
+      if (beforeChoices && beforeChoices.length > 15) {
+        problemText = stripGarbageUnicode(beforeChoices);
+      }
+    }
+    problemText = stripGarbageUnicode(problemText);
     if (!problemText || problemText.trim().length === 0) {
       console.warn(`[SAT-DEBUG] [extractCurrentProblem] question \uD14D\uC2A4\uD2B8 \uCD94\uCD9C \uC2E4\uD328 - placeholder \uC0AC\uC6A9`);
       problemText = "[QUESTION_NOT_EXTRACTED]";
@@ -10009,7 +10053,7 @@
             explanationText = correctEngMatch.slice(1).join(" ").trim();
           }
           explanationText = explanationText.replace(/^[A-D][\.\)]\s*[^\n]*/gm, "").trim();
-          const cleaned = explanationText.replace(/\s+/g, " ").trim();
+          const cleaned = stripGarbageUnicode(explanationText.replace(/\s+/g, " ").trim());
           if (cleaned.length > 10) {
             foundExplanations.push({ selector, text: cleaned });
             console.log(`[SAT PDF Exporter] Explanation \uBC1C\uACAC (\uD3F4\uBC31, ${selector}): ${cleaned.substring(0, 50)}...`);
@@ -10022,7 +10066,7 @@
       const explanationProgress = getProgressState();
       fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "extract.js:extractExplanationAfterGrading:explanationFoundFallback", message: "explanation found via fallback", data: { correctAnswer, explanationProblemNum, explanationProgress, currentProblemNum, foundCount: foundExplanations.length, explanationPreview: foundExplanations[0].text.substring(0, 100), explanationLength: foundExplanations[0].text.length }, timestamp: Date.now(), sessionId: "debug-session", runId: "run1", hypothesisId: "E" }) }).catch(() => {
       });
-      return foundExplanations[0].text;
+      return stripGarbageUnicode(foundExplanations[0].text);
     }
     const gradedBoxes = satRoot2.querySelectorAll('[class*="correct"], [class*="incorrect"], [class*="\uC815\uB2F5"], [class*="\uC624\uB2F5"]');
     for (const box of gradedBoxes) {
@@ -10379,12 +10423,13 @@
     }
     return null;
   }
-  var CHOICE_VIS_WAIT_MS, CHOICE_VIS_MAX_ITER, BTN_SEL, SEL_OPTION;
+  var GARBAGE_UNICODE_RE, CHOICE_VIS_WAIT_MS, CHOICE_VIS_MAX_ITER, BTN_SEL, SEL_OPTION;
   var init_extract = __esm({
     "src/dom/extract.js"() {
       init_deepQuery();
       init_query();
       init_query();
+      GARBAGE_UNICODE_RE = /\s*[ÆÈ][\s\$²³õö0-9Çäz!]{0,35}\s*/g;
       CHOICE_VIS_WAIT_MS = 80;
       CHOICE_VIS_MAX_ITER = 20;
       BTN_SEL = "mat-action-list.choices-container button";
@@ -10472,20 +10517,24 @@
       inputSelectors: [
         '[data-testid*="input"]',
         '[data-testid*="textbox"]',
+        '[data-placeholder*="message"]',
+        '[data-placeholder*="ask"]',
+        '[data-placeholder*="prompt"]',
         '[role="textbox"]',
         '[role="combobox"]',
-        '[contenteditable="true"]',
         'textarea[aria-label*="message"]',
         'textarea[aria-label*="prompt"]',
         'textarea[aria-label*="chat"]',
+        'textarea[aria-label*="ask"]',
         'textarea[aria-label*="\uC785\uB825"]',
         'textarea[aria-label*="\uBB3C\uC5B4\uBCF4\uAE30"]',
-        'textarea[aria-label*="ask"]',
         'textarea[placeholder*="message"]',
         'textarea[placeholder*="prompt"]',
         'textarea[placeholder*="chat"]',
+        'textarea[placeholder*="ask"]',
         'textarea[placeholder*="\uC785\uB825"]',
-        'textarea[placeholder*="\uBB3C\uC5B4\uBCF4\uAE30"]'
+        'textarea[placeholder*="\uBB3C\uC5B4\uBCF4\uAE30"]',
+        '[contenteditable="true"]'
       ],
       submitSelectors: [
         'button[data-testid*="send"]',
@@ -14211,6 +14260,42 @@
       throw error;
     }
   }
+  var GARBAGE_UNICODE_RE2 = /\s*[ÆÈ][\s\$²³õö0-9Çäz!]{0,35}\s*/g;
+  function sanitizeForPDF(text) {
+    if (text == null || typeof text !== "string") return "";
+    let s = text.replace(/\r\n|\r/g, "\n").replace(/\n{2,}/g, "\n").replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[\uE000-\uF8FF]/g, "");
+    s = s.replace(GARBAGE_UNICODE_RE2, " ");
+    s = s.split("\n").filter((line) => {
+      const t = line.trim();
+      if (t.length >= 1 && t.length <= 6 && !/[A-Za-z0-9]/.test(t)) return false;
+      return true;
+    }).join("\n");
+    const lines = s.split("\n").map((l) => l.trim()).filter(Boolean);
+    const merged = [];
+    let i = 0;
+    while (i < lines.length) {
+      const curr = lines[i];
+      const isShort = curr.length <= 3 && !/^[A-D][\.\)]\s*$/.test(curr);
+      if (isShort && i + 1 < lines.length) {
+        const next = lines[i + 1];
+        const nextShort = next.length <= 3 && !/^[A-D][\.\)]\s*$/.test(next);
+        if (nextShort) {
+          let combined = curr + " " + next;
+          i += 2;
+          while (i < lines.length && lines[i].length <= 3 && !/^[A-D][\.\)]\s*$/.test(lines[i])) {
+            combined += " " + lines[i];
+            i++;
+          }
+          merged.push(combined);
+          continue;
+        }
+      }
+      merged.push(curr);
+      i++;
+    }
+    s = merged.join("\n").replace(/\s{2,}/g, " ").replace(/\n{2,}/g, "\n").trim();
+    return s;
+  }
   function addProblemsSectionToPDF(doc, sectionName, problems, startY, maxWidth, margin, pageHeight, lineHeight, sectionSpacing) {
     let yPosition = startY;
     doc.setFontSize(14);
@@ -14249,7 +14334,7 @@
       doc.setFontSize(10);
       doc.setFont(void 0, "normal");
       if (problem.passage) {
-        const passageLines = doc.splitTextToSize(problem.passage, maxWidth);
+        const passageLines = doc.splitTextToSize(sanitizeForPDF(problem.passage), maxWidth);
         passageLines.forEach((line) => {
           if (yPosition + lineHeight > pageHeight - 20) {
             doc.addPage();
@@ -14262,7 +14347,7 @@
       }
       let questionText = problem.question || problem.stem || "[QUESTION_NOT_EXTRACTED]";
       if (questionText && questionText.trim().length > 0) {
-        const questionLines = doc.splitTextToSize(questionText, maxWidth);
+        const questionLines = doc.splitTextToSize(sanitizeForPDF(questionText), maxWidth);
         questionLines.forEach((line) => {
           if (yPosition + lineHeight > pageHeight - 20) {
             doc.addPage();
@@ -14338,7 +14423,7 @@
               doc.addPage();
               yPosition = margin;
             }
-            const choiceText = `${choice.label}. ${choice.text}`;
+            const choiceText = `${choice.label}. ${sanitizeForPDF(choice.text || "")}`;
             const choiceLines = doc.splitTextToSize(choiceText, maxWidth - 10);
             choiceLines.forEach((line) => {
               if (yPosition + lineHeight > pageHeight - 20) {
@@ -14357,7 +14442,7 @@
                 doc.addPage();
                 yPosition = margin;
               }
-              const choiceText = `${label}. ${problem.choices[label]}`;
+              const choiceText = `${label}. ${sanitizeForPDF(problem.choices[label] || "")}`;
               const choiceLines = doc.splitTextToSize(choiceText, maxWidth - 10);
               choiceLines.forEach((line) => {
                 if (yPosition + lineHeight > pageHeight - 20) {
@@ -14460,7 +14545,7 @@
           }
         }
         if (answerText && answerText.trim().length > 0) {
-          const answerDisplay = `Answer: ${problem.correctAnswer} (${answerText.trim()})`;
+          const answerDisplay = `Answer: ${problem.correctAnswer} (${sanitizeForPDF(answerText).trim()})`;
           const answerLines = doc.splitTextToSize(answerDisplay, maxWidth);
           answerLines.forEach((line) => {
             if (yPosition + lineHeight > pageHeight - 20) {
@@ -14490,7 +14575,7 @@
           }
         }
         if (answerText && answerText.trim().length > 0) {
-          const answerDisplay = `Answer: ${problem.answer} (${answerText.trim()})`;
+          const answerDisplay = `Answer: ${problem.answer} (${sanitizeForPDF(answerText).trim()})`;
           const answerLines = doc.splitTextToSize(answerDisplay, maxWidth);
           answerLines.forEach((line) => {
             if (yPosition + lineHeight > pageHeight - 20) {
@@ -14523,7 +14608,7 @@
       doc.setFont("helvetica", "normal");
       doc.setTextColor(80, 80, 80);
       if (problem.explanation && problem.explanation.trim().length > 0) {
-        const explanationText = `Explanation: ${problem.explanation}`;
+        const explanationText = `Explanation: ${sanitizeForPDF(problem.explanation)}`;
         const explanationLines = doc.splitTextToSize(explanationText, maxWidth);
         explanationLines.forEach((line) => {
           if (yPosition + lineHeight > pageHeight - 20) {
@@ -15205,54 +15290,76 @@
       this.isProcessing = false;
     }
     /**
-     * 채팅 입력창 찾기 (우선순위: data-testid/role → aria-label/placeholder → 전체 스캔)
+     * 채팅 입력창 찾기 (top + iframe 검색, 입력창 로드 대기 포함)
      * @returns {Promise<HTMLElement|null>}
      */
     async findChatInput() {
       console.log("[GeminiChat] \uC785\uB825\uCC3D \uCC3E\uAE30 \uC2DC\uC791...");
-      fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "geminiChat.js:findChatInput:entry", message: "findChatInput entry", data: {}, timestamp: Date.now(), runId: "run1", hypothesisId: "B" }) }).catch(() => {
-      });
-      for (const selector of CONFIG.geminiChat.inputSelectors.slice(0, 4)) {
-        const elements = deepQuerySelectorAll(selector);
-        for (const el of elements) {
-          if (isElementVisible(el) && !el.disabled && !el.readOnly) {
-            console.log("[GeminiChat] \uC785\uB825\uCC3D \uBC1C\uACAC (1\uC21C\uC704):", selector, el);
-            fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "geminiChat.js:findChatInput:found1", message: "input found tier1", data: { selector, tagName: el.tagName, hasValue: !!el.value, contentEditable: el.contentEditable }, timestamp: Date.now(), runId: "run1", hypothesisId: "B" }) }).catch(() => {
-            });
-            return el;
+      const roots = [document];
+      try {
+        if (window.top && window.top.document && window.top.document !== document) {
+          roots.unshift(window.top.document);
+        }
+        if (window.top && window.top.frames) {
+          for (let i = 0; i < window.top.frames.length; i++) {
+            try {
+              const fr = window.top.frames[i];
+              if (fr.document && fr.document !== document && !roots.includes(fr.document)) roots.push(fr.document);
+            } catch (_) {
+            }
           }
         }
+      } catch (_) {
       }
-      for (const selector of CONFIG.geminiChat.inputSelectors.slice(4)) {
-        const elements = deepQuerySelectorAll(selector);
-        for (const el of elements) {
-          const isEditable = el.contentEditable === "true" || !el.disabled && el.readOnly !== true;
-          if (isElementVisible(el) && isEditable) {
-            const placeholder = (el.getAttribute("placeholder") || "").toLowerCase();
-            const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
-            const title = (el.getAttribute("title") || "").toLowerCase();
-            const matches = placeholder.includes("message") || placeholder.includes("prompt") || placeholder.includes("chat") || placeholder.includes("\uC785\uB825") || placeholder.includes("\uBB3C\uC5B4\uBCF4\uAE30") || placeholder.includes("ask") || ariaLabel.includes("message") || ariaLabel.includes("prompt") || ariaLabel.includes("chat") || ariaLabel.includes("\uC785\uB825") || ariaLabel.includes("\uBB3C\uC5B4\uBCF4\uAE30") || ariaLabel.includes("ask") || title.includes("message") || title.includes("prompt") || title.includes("chat") || title.includes("\uBB3C\uC5B4\uBCF4\uAE30");
-            if (matches) {
-              console.log("[GeminiChat] \uC785\uB825\uCC3D \uBC1C\uACAC (2\uC21C\uC704):", selector, el);
+      const searchInRoot = (root) => {
+        for (const selector of CONFIG.geminiChat.inputSelectors.slice(0, 4)) {
+          const elements = deepQuerySelectorAll(selector, root);
+          for (const el of elements) {
+            if (isElementVisible(el) && !el.disabled && el.readOnly !== true) {
+              console.log("[GeminiChat] \uC785\uB825\uCC3D \uBC1C\uACAC (1\uC21C\uC704):", selector, el);
               return el;
             }
           }
         }
-      }
-      const allInputs = deepQuerySelectorAll('textarea, input[type="text"], [contenteditable="true"]');
-      for (const el of allInputs) {
-        if (isElementVisible(el) && (el.disabled === false || el.disabled === void 0) && el.readOnly !== true) {
-          const rect = el.getBoundingClientRect();
-          if (rect.bottom > window.innerHeight * 0.5) {
-            console.log("[GeminiChat] \uC785\uB825\uCC3D \uBC1C\uACAC (3\uC21C\uC704 - \uC804\uCCB4 \uC2A4\uCE94):", el);
-            fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "geminiChat.js:findChatInput:found3", message: "input found tier3", data: { tagName: el.tagName, contentEditable: el.contentEditable, rectBottom: rect.bottom, innerHeight: window.innerHeight }, timestamp: Date.now(), runId: "run1", hypothesisId: "B" }) }).catch(() => {
-            });
-            return el;
+        for (const selector of CONFIG.geminiChat.inputSelectors.slice(4)) {
+          const elements = deepQuerySelectorAll(selector, root);
+          for (const el of elements) {
+            const isEditable = el.contentEditable === "true" || !el.disabled && el.readOnly !== true;
+            if (isElementVisible(el) && isEditable) {
+              const placeholder = (el.getAttribute("placeholder") || "").toLowerCase();
+              const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+              const title = (el.getAttribute("title") || "").toLowerCase();
+              const matches = placeholder.includes("message") || placeholder.includes("prompt") || placeholder.includes("chat") || placeholder.includes("\uC785\uB825") || placeholder.includes("\uBB3C\uC5B4\uBCF4\uAE30") || placeholder.includes("ask") || ariaLabel.includes("message") || ariaLabel.includes("prompt") || ariaLabel.includes("chat") || ariaLabel.includes("\uC785\uB825") || ariaLabel.includes("\uBB3C\uC5B4\uBCF4\uAE30") || ariaLabel.includes("ask") || title.includes("message") || title.includes("prompt") || title.includes("chat") || title.includes("\uBB3C\uC5B4\uBCF4\uAE30");
+              if (matches) {
+                console.log("[GeminiChat] \uC785\uB825\uCC3D \uBC1C\uACAC (2\uC21C\uC704):", selector, el);
+                return el;
+              }
+            }
           }
         }
+        const allInputs = deepQuerySelectorAll('textarea, input[type="text"], [contenteditable="true"]', root);
+        for (const el of allInputs) {
+          if (isElementVisible(el) && (el.disabled === false || el.disabled === void 0) && el.readOnly !== true) {
+            const rect = el.getBoundingClientRect();
+            const win = root.defaultView || window;
+            if (rect.bottom > (win.innerHeight || 400) * 0.4) {
+              console.log("[GeminiChat] \uC785\uB825\uCC3D \uBC1C\uACAC (3\uC21C\uC704):", el);
+              return el;
+            }
+          }
+        }
+        return null;
+      };
+      for (let attempt = 0; attempt < 30; attempt++) {
+        for (const root of roots) {
+          try {
+            const found = searchInRoot(root);
+            if (found) return found;
+          } catch (_) {
+          }
+        }
+        if (attempt < 29) await new Promise((r) => setTimeout(r, 500));
       }
-      fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "geminiChat.js:findChatInput:notFound", message: "input not found", data: { allInputsCount: allInputs.length }, timestamp: Date.now(), runId: "run1", hypothesisId: "B" }) }).catch(() => {
-      });
       console.warn("[GeminiChat] \uC785\uB825\uCC3D\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return null;
     }
@@ -15265,6 +15372,7 @@
       console.log("[GeminiChat] \uBA54\uC2DC\uC9C0 \uC785\uB825 \uC2DC\uC791:", message);
       fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "geminiChat.js:typeMessage:entry", message: "typeMessage entry", data: { messageLen: message?.length }, timestamp: Date.now(), runId: "run1", hypothesisId: "C" }) }).catch(() => {
       });
+      await new Promise((resolve) => setTimeout(resolve, 800));
       const input = await this.findChatInput();
       if (!input) {
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "geminiChat.js:typeMessage:inputNull", message: "findChatInput returned null", data: {}, timestamp: Date.now(), runId: "run1", hypothesisId: "B" }) }).catch(() => {
@@ -15275,35 +15383,62 @@
       });
       try {
         input.focus();
-        await new Promise((resolve) => setTimeout(resolve, 120));
-        if (input.value) {
-          input.value = "";
-          input.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
-        }
+        input.click();
+        await new Promise((resolve) => setTimeout(resolve, 200));
         if (input.contentEditable === "true") {
           input.textContent = "";
           input.innerHTML = "";
-          input.dispatchEvent(new InputEvent("input", { bubbles: true, cancelable: true, inputType: "deleteContentForward" }));
+        } else if (input.value !== void 0) {
+          input.value = "";
+        }
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        try {
+          const doc = input.ownerDocument || document;
+          const sel = doc.getSelection && doc.getSelection();
+          if (sel) {
+            sel.removeAllRanges();
+            const range = doc.createRange();
+            range.selectNodeContents(input);
+            if (input.firstChild) range.collapse(true);
+            sel.addRange(range);
+          }
+          if (typeof doc.execCommand === "function") {
+            doc.execCommand("insertText", false, message);
+          }
+        } catch (_) {
         }
         if (input.contentEditable === "true") {
-          input.textContent = message;
-          input.innerText = message;
-          input.dispatchEvent(new InputEvent("input", { bubbles: true, cancelable: true, inputType: "insertText", data: message }));
+          if (!input.textContent || !input.textContent.includes("SAT")) {
+            input.textContent = message;
+            input.innerText = message;
+            input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: message }));
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }
         } else {
           input.value = message;
-          input.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
         }
-        const textarea = input.tagName === "TEXTAREA" ? input : null;
-        if (textarea) {
-          textarea.value = message;
-          textarea.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const afterDirect = input.contentEditable === "true" ? input.textContent || input.innerText || "" : input.value || "";
+        if (!afterDirect.includes("SAT") && typeof navigator.clipboard?.writeText === "function") {
+          try {
+            await navigator.clipboard.writeText(message);
+            input.focus();
+            const doc = input.ownerDocument || document;
+            if (typeof doc.execCommand === "function") {
+              doc.execCommand("paste");
+            }
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          } catch (_) {
+          }
         }
         await new Promise((resolve) => setTimeout(resolve, 200));
         const afterValue = input.contentEditable === "true" ? input.textContent || input.innerText : input.value;
         fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "geminiChat.js:typeMessage:afterSet", message: "value after set", data: { afterValue: afterValue?.slice(0, 50), expectedMatch: afterValue?.includes("SAT") }, timestamp: Date.now(), runId: "run1", hypothesisId: "C" }) }).catch(() => {
         });
-        const submitButton = await this.findSubmitButton();
+        const submitButton = await this.findSubmitButton(input.ownerDocument || document);
         if (submitButton) {
           console.log("[GeminiChat] \uC804\uC1A1 \uBC84\uD2BC \uD074\uB9AD");
           await safeClick(submitButton);
@@ -15322,12 +15457,13 @@
       }
     }
     /**
-     * 전송 버튼 찾기
+     * 전송 버튼 찾기 (입력창과 같은 document/iframe에서 검색)
+     * @param {Document} [root=document]
      * @returns {Promise<HTMLElement|null>}
      */
-    async findSubmitButton() {
+    async findSubmitButton(root = document) {
       for (const selector of CONFIG.geminiChat.submitSelectors) {
-        const buttons = deepQuerySelectorAll(selector);
+        const buttons = deepQuerySelectorAll(selector, root);
         for (const btn of buttons) {
           if (isElementVisible(btn) && !btn.disabled) {
             return btn;
@@ -15830,6 +15966,64 @@
       return count;
     }
     /**
+     * 새 채팅(Gemini 로고 /app) 클릭 후 초기 화면 로드 대기
+     * 세트 2 이상 시 PDF 생성 후 다음 세트를 위해 호출
+     */
+    async clickNewChatAndWaitForReady() {
+      const topDoc = window.top && window.top.document ? window.top.document : document;
+      let link = null;
+      const bardText = topDoc.querySelector('[data-test-id="bard-text"]') || topDoc.querySelector(".bard-text");
+      if (bardText) {
+        link = bardText.closest("a");
+      }
+      if (!link && topDoc !== document && document.querySelector) {
+        const bardTextLocal = document.querySelector('[data-test-id="bard-text"]') || document.querySelector(".bard-text");
+        if (bardTextLocal) link = bardTextLocal.closest("a");
+      }
+      try {
+        for (let i = 0; i < (window.top?.frames?.length || 0); i++) {
+          try {
+            const fr = window.top.frames[i];
+            const d = fr.document;
+            if (!d) continue;
+            const bt = d.querySelector('[data-test-id="bard-text"]') || d.querySelector(".bard-text");
+            if (bt) {
+              const a = bt.closest("a");
+              if (a) {
+                link = a;
+                break;
+              }
+            }
+          } catch (_) {
+          }
+        }
+      } catch (_) {
+      }
+      if (!link) {
+        link = topDoc.querySelector('a[href="/app"]') || topDoc.querySelector('a[aria-label="\uC0C8 \uCC44\uD305"]') || topDoc.querySelector('a[aria-label="New chat"]') || topDoc.querySelector('.bard-logo-container a[href="/app"]') || topDoc.querySelector('a[href*="/app"]');
+      }
+      if (!link) {
+        throw new Error('\uC0C8 \uCC44\uD305 \uBC84\uD2BC\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. (Gemini \uB85C\uACE0 \uB610\uB294 a[href="/app"])');
+      }
+      showToast("\uC0C8 \uCC44\uD305\uC73C\uB85C \uC774\uB3D9 \uC911...", "info");
+      link.scrollIntoView({ behavior: "instant", block: "center" });
+      await new Promise((r) => setTimeout(r, 400));
+      try {
+        const clicked2 = await safeClick(link);
+        if (!clicked2) link.click();
+      } catch (_) {
+        link.click();
+      }
+      await new Promise((r) => setTimeout(r, 500));
+      await waitForCondition(
+        () => (window.top?.location?.href || "").includes("/app"),
+        15e3,
+        200
+      );
+      await new Promise((r) => setTimeout(r, 1200));
+      showToast("\uCD08\uAE30 \uD654\uBA74 \uB85C\uB4DC \uC644\uB8CC. \uB2E4\uC74C \uC138\uD2B8 \uC900\uBE44 \uC911...", "info");
+    }
+    /**
      * Export 버튼 클릭 핸들러
      * @param {HTMLElement} button - 클릭된 버튼 요소
      */
@@ -15865,137 +16059,115 @@
         button.disabled = true;
         button.classList.add("loading");
         button.textContent = "";
-        const isChat = isGeminiChatPage();
-        const isSAT = isSATTestPage();
-        fetch("http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "content.entry.js:handleExportClick:chatCheck", message: "handleExportClick chat block check", data: { isChat, isSAT, willEnterChatBlock: isChat && !isSAT, url: location.href }, timestamp: Date.now(), runId: "run1", hypothesisId: "A" }) }).catch(() => {
-        });
-        if (isChat && !isSAT) {
-          showToast("SAT \uD14C\uC2A4\uD2B8 \uC694\uCCAD \uBA54\uC2DC\uC9C0 \uC785\uB825 \uC911...", "info");
-          const automator = new GeminiChatAutomator();
-          await automator.typeMessage(CONFIG.geminiChat.message);
-          console.log("[SATApp] \uBA54\uC2DC\uC9C0 \uC804\uC1A1 \uC644\uB8CC, SAT UI \uB300\uAE30 \uC911...");
-          showToast("SAT \uD14C\uC2A4\uD2B8 \uD654\uBA74\uC774 \uB098\uD0C0\uB0A0 \uB54C\uAE4C\uC9C0 \uB300\uAE30 \uC911...", "info");
-          const satUIDetected = await automator.waitForSATUI();
-          if (!satUIDetected) {
-            throw new Error("SAT \uD14C\uC2A4\uD2B8 \uD654\uBA74\uC774 \uB098\uD0C0\uB098\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uD0C0\uC784\uC544\uC6C3\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+        for (let setIndex = 1; setIndex <= exportSetCount; setIndex += 1) {
+          showToast(`\uC138\uD2B8 ${setIndex}/${exportSetCount} \uC9C4\uD589 \uC911...`, "info");
+          if (setIndex > 1) {
+            await this.clickNewChatAndWaitForReady();
+            await new Promise((r) => setTimeout(r, 1500));
+            showToast("\uC785\uB825\uCC3D \uB85C\uB4DC \uB300\uAE30 \uC911...", "info");
+            await new Promise((r) => setTimeout(r, 1e3));
           }
-          console.log("[SATApp] SAT UI \uC9C4\uC785 \uC644\uB8CC, \uB2E4\uC74C \uB2E8\uACC4 \uC9C4\uD589");
-          showToast("SAT \uD14C\uC2A4\uD2B8 \uD654\uBA74 \uC9C4\uC785 \uC644\uB8CC!", "success");
-          try {
-            if (typeof app.init === "function") app.init();
-          } catch (e) {
-            console.warn("[SATApp] init \uC7AC\uD638\uCD9C \uC911 \uC624\uB958:", e);
-          }
-          await new Promise((resolve) => setTimeout(resolve, 200));
-        }
-        try {
-          console.log("[SATApp] Export \uC804 \uC124\uC815 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC2DC\uB3C4");
-          await runSetupSequence();
-        } catch (setupError) {
-          console.warn("[SATApp] \uC124\uC815 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911 \uC624\uB958 (\uACC4\uC18D \uC9C4\uD589):", setupError);
-        }
-        try {
-          console.log("[SATApp] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC2DC\uB3C4");
-          showToast("\uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC911...", "info");
-          await configureAndStartTest();
-          showToast("\uBB38\uC81C \uD654\uBA74 \uB85C\uB4DC \uB300\uAE30 \uC911...", "info");
-          await new Promise((resolve) => setTimeout(resolve, 400));
-        } catch (startError) {
-          console.warn("[SATApp] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uCC98\uB9AC \uC911 \uC624\uB958 (\uACC4\uC18D \uC9C4\uD589):", startError);
-        }
-        console.log("[FRAME] selectWorkerFrame start");
-        showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784 \uCC3E\uB294 \uC911...", "info");
-        console.log("[SATApp] Worker \uD504\uB808\uC784 \uCC3E\uAE30 \uC2DC\uC791");
-        const worker = await findWorkerFrame();
-        console.log("[FRAME] selectWorkerFrame result:", worker ? "found" : "not found", {
-          frameCount: window.frames.length,
-          top: window === window.top
-        });
-        let allData = null;
-        if (!worker) {
-          if (looksLikeSatQuestionUI()) {
-            console.log("[SATApp] \uD604\uC7AC \uD504\uB808\uC784\uC774 \uBB38\uC81C UI\uC785\uB2C8\uB2E4. \uC774 \uD504\uB808\uC784\uC5D0\uC11C \uC791\uC5C5\uD569\uB2C8\uB2E4.");
-            window.__SAT_IS_WORKER = true;
-            console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2DC\uC791");
-            console.warn("[NAV_INIT] \u2605 \uD638\uCD9C \uC704\uCE58: content.entry (top, worker \uC5C6\uC74C\xB7\uD604\uC7AC\uAC00 \uBB38\uC81C UI)", window.location.href);
-            showToast("\uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911...", "info");
-            await this.navigator.handleInitialNavigation();
-            console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC644\uB8CC");
-            showToast("\uBAA8\uB4E0 \uBB38\uC81C\uB97C \uC218\uC9D1\uD558\uB294 \uC911...", "info");
-            console.log("[SATApp] \uBB38\uC81C \uC218\uC9D1 \uC2DC\uC791 (\uD604\uC7AC \uD504\uB808\uC784:", window.location.href, ")");
-            allData = await this.scraper.collectAllProblems();
-          } else {
-            console.warn("[SATApp] Worker \uD504\uB808\uC784\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uD604\uC7AC \uD504\uB808\uC784\uC5D0\uC11C \uC2DC\uB3C4\uD569\uB2C8\uB2E4.");
-            showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uD604\uC7AC \uD504\uB808\uC784\uC5D0\uC11C \uC2DC\uB3C4\uD569\uB2C8\uB2E4.", "error");
-            console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2DC\uC791");
-            console.warn("[NAV_INIT] \u2605 \uD638\uCD9C \uC704\uCE58: content.entry (top, fallback)", window.location.href);
-            showToast("\uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911...", "info");
-            await this.navigator.handleInitialNavigation();
-            console.log("[SATApp] \uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC644\uB8CC");
-            console.log("[FLOW] start scraper called (current frame fallback)");
-            showToast("\uBAA8\uB4E0 \uBB38\uC81C\uB97C \uC218\uC9D1\uD558\uB294 \uC911...", "info");
-            console.log("[SATApp] \uBB38\uC81C \uC218\uC9D1 \uC2DC\uC791 (\uD604\uC7AC \uD504\uB808\uC784:", window.location.href, ")");
-            allData = await this.scraper.collectAllProblems();
-          }
-        } else {
-          console.log("[SATApp] Worker \uD504\uB808\uC784 \uBC1C\uACAC:", worker.href);
-          showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784 \uBC1C\uACAC! \uC791\uC5C5 \uC2DC\uC791...", "success");
-          console.log("[FRAME] SAT_START sent", { workerHref: worker.href, top: window === window.top });
-          window.postMessage({ type: "SAT_START", workerHref: worker.href }, location.origin);
-          allData = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              window.removeEventListener("message", onMsg);
-              reject(new Error("Worker \uD504\uB808\uC784\uC5D0\uC11C \uC218\uC9D1 \uC644\uB8CC \uBA54\uC2DC\uC9C0\uB97C \uBC1B\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4 (\uD0C0\uC784\uC544\uC6C3 5\uBD84)"));
-            }, 5 * 60 * 1e3);
-            function onMsg(ev) {
-              if (ev?.data?.type === "SAT_COLLECTION_COMPLETE") {
-                clearTimeout(timeout);
-                window.removeEventListener("message", onMsg);
-                console.log("[SATApp] Worker \uD504\uB808\uC784\uC5D0\uC11C \uC218\uC9D1 \uC644\uB8CC \uBA54\uC2DC\uC9C0 \uC218\uC2E0");
-                resolve(ev.data.data);
-              } else if (ev?.data?.type === "SAT_COLLECTION_ERROR") {
-                clearTimeout(timeout);
-                window.removeEventListener("message", onMsg);
-                console.error("[SATApp] Worker \uD504\uB808\uC784\uC5D0\uC11C \uC218\uC9D1 \uC624\uB958:", ev.data.error);
-                reject(new Error(ev.data.error));
-              }
+          const isSAT = isSATTestPage();
+          if (!isSAT) {
+            showToast("SAT \uD14C\uC2A4\uD2B8 \uC694\uCCAD \uBA54\uC2DC\uC9C0 \uC785\uB825 \uC911...", "info");
+            const automator = new GeminiChatAutomator();
+            await automator.typeMessage(CONFIG.geminiChat.message);
+            console.log("[SATApp] \uBA54\uC2DC\uC9C0 \uC804\uC1A1 \uC644\uB8CC, SAT UI \uB300\uAE30 \uC911...");
+            showToast("SAT \uD14C\uC2A4\uD2B8 \uD654\uBA74\uC774 \uB098\uD0C0\uB0A0 \uB54C\uAE4C\uC9C0 \uB300\uAE30 \uC911...", "info");
+            const satUIDetected = await automator.waitForSATUI();
+            if (!satUIDetected) {
+              throw new Error("SAT \uD14C\uC2A4\uD2B8 \uD654\uBA74\uC774 \uB098\uD0C0\uB098\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uD0C0\uC784\uC544\uC6C3\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
             }
-            window.addEventListener("message", onMsg);
-          });
-        }
-        console.log("[SATApp] \uBB38\uC81C \uC218\uC9D1 \uC644\uB8CC:", {
-          reading: allData.reading.length,
-          math: allData.math.length
-        });
-        if ((!allData.reading || allData.reading.length === 0) && (!allData.math || allData.math.length === 0)) {
-          throw new Error("\uCD94\uCD9C\uD560 SAT \uBB38\uC81C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-        }
-        const totalProblems = allData.reading.length + allData.math.length;
-        if (!allData.timestamp) allData.timestamp = (/* @__PURE__ */ new Date()).toISOString();
-        showToast(`${totalProblems}\uAC1C\uC758 \uBB38\uC81C\uB97C \uC218\uC9D1\uD588\uC2B5\uB2C8\uB2E4. PDF ${exportSetCount}\uC138\uD2B8(4\uAC1C/\uC138\uD2B8) \uC0DD\uC131 \uC911...`, "info");
-        const readingCount = (allData.reading || []).length;
-        const mathCount = (allData.math || []).length;
-        const expectedPdfs = (readingCount > 0 ? 2 : 0) + (mathCount > 0 ? 2 : 0);
-        console.log(`[SATApp] PDF \uC0DD\uC131 \uC608\uC815: Reading ${readingCount}\uAC1C \u2192 ${readingCount > 0 ? "\uBB38\uC81C\uC9C0+\uD574\uC124\uC9C0" : "\uC2A4\uD0B5"}, Math ${mathCount}\uAC1C \u2192 ${mathCount > 0 ? "\uBB38\uC81C\uC9C0+\uD574\uC124\uC9C0" : "\uC2A4\uD0B5"} (\uCD1D ${expectedPdfs}\uAC1C)`);
-        for (let i = 1; i <= exportSetCount; i += 1) {
-          showToast(`Reading \uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
-          const readingProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, "reading");
-          showToast(`Reading \uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
-          const readingAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, "reading");
-          showToast(`Math \uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
-          const mathProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, "math");
-          showToast(`Math \uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (${i}/${exportSetCount})`, "info");
-          const mathAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, "math");
-          const nullCount = [readingProblemsDoc, readingAnswersDoc, mathProblemsDoc, mathAnswersDoc].filter((d) => d == null).length;
-          if (nullCount > 0) {
-            console.warn(`[SATApp] null PDF ${nullCount}\uAC1C (\uC77D\uAE30:${readingCount}\uAC1C, \uC218\uD559:${mathCount}\uAC1C) - \uBB38\uC81C\uAC00 \uC5C6\uB294 \uC139\uC158\uC740 PDF \uBBF8\uC0DD\uC131`);
+            console.log("[SATApp] SAT UI \uC9C4\uC785 \uC644\uB8CC, \uB2E4\uC74C \uB2E8\uACC4 \uC9C4\uD589");
+            showToast("SAT \uD14C\uC2A4\uD2B8 \uD654\uBA74 \uC9C4\uC785 \uC644\uB8CC!", "success");
+            try {
+              if (typeof app.init === "function") app.init();
+            } catch (e) {
+              console.warn("[SATApp] init \uC7AC\uD638\uCD9C \uC911 \uC624\uB958:", e);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 200));
           }
+          try {
+            console.log("[SATApp] Export \uC804 \uC124\uC815 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC2DC\uB3C4");
+            await runSetupSequence();
+          } catch (setupError) {
+            console.warn("[SATApp] \uC124\uC815 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911 \uC624\uB958 (\uACC4\uC18D \uC9C4\uD589):", setupError);
+          }
+          try {
+            console.log("[SATApp] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC2DC\uB3C4");
+            showToast("\uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uBC84\uD2BC \uD074\uB9AD \uC911...", "info");
+            await configureAndStartTest();
+            showToast("\uBB38\uC81C \uD654\uBA74 \uB85C\uB4DC \uB300\uAE30 \uC911...", "info");
+            await new Promise((resolve) => setTimeout(resolve, 400));
+          } catch (startError) {
+            console.warn("[SATApp] \uD14C\uC2A4\uD2B8 \uC2DC\uC791 \uCC98\uB9AC \uC911 \uC624\uB958 (\uACC4\uC18D \uC9C4\uD589):", startError);
+          }
+          showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784 \uCC3E\uB294 \uC911...", "info");
+          const worker = await findWorkerFrame();
+          let allData = null;
+          if (!worker) {
+            if (looksLikeSatQuestionUI()) {
+              window.__SAT_IS_WORKER = true;
+              showToast("\uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911...", "info");
+              await this.navigator.handleInitialNavigation();
+              showToast("\uBAA8\uB4E0 \uBB38\uC81C\uB97C \uC218\uC9D1\uD558\uB294 \uC911...", "info");
+              allData = await this.scraper.collectAllProblems();
+            } else {
+              showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uD604\uC7AC \uD504\uB808\uC784\uC5D0\uC11C \uC2DC\uB3C4\uD569\uB2C8\uB2E4.", "error");
+              showToast("\uC790\uB3D9 \uC9C4\uC785 \uC2DC\uD000\uC2A4 \uC2E4\uD589 \uC911...", "info");
+              await this.navigator.handleInitialNavigation();
+              showToast("\uBAA8\uB4E0 \uBB38\uC81C\uB97C \uC218\uC9D1\uD558\uB294 \uC911...", "info");
+              allData = await this.scraper.collectAllProblems();
+            }
+          } else {
+            console.log("[SATApp] Worker \uD504\uB808\uC784 \uBC1C\uACAC:", worker.href);
+            showToast("\uBB38\uC81C \uD654\uBA74 \uD504\uB808\uC784 \uBC1C\uACAC! \uC791\uC5C5 \uC2DC\uC791...", "success");
+            window.postMessage({ type: "SAT_START", workerHref: worker.href }, location.origin);
+            allData = await new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                window.removeEventListener("message", onMsg);
+                reject(new Error("Worker \uD504\uB808\uC784\uC5D0\uC11C \uC218\uC9D1 \uC644\uB8CC \uBA54\uC2DC\uC9C0\uB97C \uBC1B\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4 (\uD0C0\uC784\uC544\uC6C3 5\uBD84)"));
+              }, 5 * 60 * 1e3);
+              function onMsg(ev) {
+                if (ev?.data?.type === "SAT_COLLECTION_COMPLETE") {
+                  clearTimeout(timeout);
+                  window.removeEventListener("message", onMsg);
+                  resolve(ev.data.data);
+                } else if (ev?.data?.type === "SAT_COLLECTION_ERROR") {
+                  clearTimeout(timeout);
+                  window.removeEventListener("message", onMsg);
+                  reject(new Error(ev.data.error));
+                }
+              }
+              window.addEventListener("message", onMsg);
+            });
+          }
+          console.log("[SATApp] \uBB38\uC81C \uC218\uC9D1 \uC644\uB8CC (\uC138\uD2B8 " + setIndex + "):", {
+            reading: allData.reading.length,
+            math: allData.math.length
+          });
+          if ((!allData.reading || allData.reading.length === 0) && (!allData.math || allData.math.length === 0)) {
+            throw new Error("\uCD94\uCD9C\uD560 SAT \uBB38\uC81C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+          }
+          const totalProblems = allData.reading.length + allData.math.length;
+          if (!allData.timestamp) allData.timestamp = (/* @__PURE__ */ new Date()).toISOString();
+          showToast(`${totalProblems}\uAC1C \uC218\uC9D1. PDF 4\uAC1C \uC0DD\uC131 \uC911 (\uC138\uD2B8 ${setIndex}/${exportSetCount})...`, "info");
+          const readingCount = (allData.reading || []).length;
+          const mathCount = (allData.math || []).length;
+          showToast(`Reading \uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (\uC138\uD2B8 ${setIndex})`, "info");
+          const readingProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, "reading");
+          showToast(`Reading \uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (\uC138\uD2B8 ${setIndex})`, "info");
+          const readingAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, "reading");
+          showToast(`Math \uBB38\uC81C\uC9C0 PDF \uC0DD\uC131 \uC911... (\uC138\uD2B8 ${setIndex})`, "info");
+          const mathProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, "math");
+          showToast(`Math \uD574\uC124\uC9C0 PDF \uC0DD\uC131 \uC911... (\uC138\uD2B8 ${setIndex})`, "info");
+          const mathAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, "math");
           await this.pdfGenerator.downloadFourPDFs(
             readingProblemsDoc,
             readingAnswersDoc,
             mathProblemsDoc,
             mathAnswersDoc,
-            { copyIndex: i, totalCopies: exportSetCount }
+            { copyIndex: setIndex, totalCopies: exportSetCount }
           );
         }
         showToast(`PDF ${exportSetCount}\uC138\uD2B8(\uCD1D ${exportSetCount * 4}\uAC1C)\uAC00 \uC131\uACF5\uC801\uC73C\uB85C \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4!`, "success");

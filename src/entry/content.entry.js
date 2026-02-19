@@ -6,7 +6,7 @@ import { SATNavigator } from '../flow/navigator.js';
 import { SATScraper } from '../flow/stateMachine.js';
 import { PDFGenerator } from '../pdf/pdfGenerator.js';
 import { looksLikeSatQuestionUI, findWorkerFrame } from '../frame/workerFrame.js';
-import { showToast, setExportRunning } from '../dom/wait.js';
+import { showToast, setExportRunning, waitForCondition, safeClick } from '../dom/wait.js';
 import { showSetCountModal } from '../dom/modal.js';
 import { GeminiChatAutomator, isGeminiChatPage, isSATTestPage } from '../flow/geminiChat.js';
 import { runSetupSequence } from '../flow/geminiSetup.js';
@@ -295,6 +295,73 @@ export class SATApp {
   }
 
   /**
+   * 새 채팅(Gemini 로고 /app) 클릭 후 초기 화면 로드 대기
+   * 세트 2 이상 시 PDF 생성 후 다음 세트를 위해 호출
+   */
+  async clickNewChatAndWaitForReady() {
+    const topDoc = window.top && window.top.document ? window.top.document : document;
+    let link = null;
+
+    // 1) Gemini 로고 텍스트( data-test-id="bard-text" )를 포함한 <a> 찾기 — 사용자가 누르는 버튼
+    const bardText = topDoc.querySelector('[data-test-id="bard-text"]') ||
+      topDoc.querySelector('.bard-text');
+    if (bardText) {
+      link = bardText.closest('a');
+    }
+    if (!link && topDoc !== document && document.querySelector) {
+      const bardTextLocal = document.querySelector('[data-test-id="bard-text"]') || document.querySelector('.bard-text');
+      if (bardTextLocal) link = bardTextLocal.closest('a');
+    }
+    try {
+      for (let i = 0; i < (window.top?.frames?.length || 0); i++) {
+        try {
+          const fr = window.top.frames[i];
+          const d = fr.document;
+          if (!d) continue;
+          const bt = d.querySelector('[data-test-id="bard-text"]') || d.querySelector('.bard-text');
+          if (bt) {
+            const a = bt.closest('a');
+            if (a) {
+              link = a;
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    // 2) 폴백: href/aria-label 기반
+    if (!link) {
+      link = topDoc.querySelector('a[href="/app"]') ||
+        topDoc.querySelector('a[aria-label="새 채팅"]') ||
+        topDoc.querySelector('a[aria-label="New chat"]') ||
+        topDoc.querySelector('.bard-logo-container a[href="/app"]') ||
+        topDoc.querySelector('a[href*="/app"]');
+    }
+
+    if (!link) {
+      throw new Error('새 채팅 버튼을 찾을 수 없습니다. (Gemini 로고 또는 a[href="/app"])');
+    }
+    showToast('새 채팅으로 이동 중...', 'info');
+    link.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await new Promise(r => setTimeout(r, 400));
+    try {
+      const clicked = await safeClick(link);
+      if (!clicked) link.click();
+    } catch (_) {
+      link.click();
+    }
+    await new Promise(r => setTimeout(r, 500));
+    await waitForCondition(
+      () => (window.top?.location?.href || '').includes('/app'),
+      15000,
+      200
+    );
+    await new Promise(r => setTimeout(r, 1200));
+    showToast('초기 화면 로드 완료. 다음 세트 준비 중...', 'info');
+  }
+
+  /**
    * Export 버튼 클릭 핸들러
    * @param {HTMLElement} button - 클릭된 버튼 요소
    */
@@ -337,180 +404,132 @@ export class SATApp {
       button.classList.add('loading');
       button.textContent = '';
 
-      // 0-a. Gemini 채팅 페이지(기본 창)에서 Export 클릭 시: 메시지 입력 → SAT UI 대기 후 진행
-      const isChat = isGeminiChatPage();
-      const isSAT = isSATTestPage();
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/aca9102a-5cac-4fa2-952a-4d856789ea5d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'content.entry.js:handleExportClick:chatCheck',message:'handleExportClick chat block check',data:{isChat,isSAT,willEnterChatBlock:isChat&&!isSAT,url:location.href},timestamp:Date.now(),runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
-      if (isChat && !isSAT) {
-        showToast('SAT 테스트 요청 메시지 입력 중...', 'info');
-        const automator = new GeminiChatAutomator();
-        await automator.typeMessage(CONFIG.geminiChat.message);
-        console.log('[SATApp] 메시지 전송 완료, SAT UI 대기 중...');
-        showToast('SAT 테스트 화면이 나타날 때까지 대기 중...', 'info');
-        const satUIDetected = await automator.waitForSATUI();
-        if (!satUIDetected) {
-          throw new Error('SAT 테스트 화면이 나타나지 않았습니다. 타임아웃되었습니다.');
+      for (let setIndex = 1; setIndex <= exportSetCount; setIndex += 1) {
+        showToast(`세트 ${setIndex}/${exportSetCount} 진행 중...`, 'info');
+
+        if (setIndex > 1) {
+          await this.clickNewChatAndWaitForReady();
+          await new Promise(r => setTimeout(r, 1500));
+          showToast('입력창 로드 대기 중...', 'info');
+          await new Promise(r => setTimeout(r, 1000));
         }
-        console.log('[SATApp] SAT UI 진입 완료, 다음 단계 진행');
-        showToast('SAT 테스트 화면 진입 완료!', 'success');
-        // SAT UI 전환 후 버튼 상태 갱신
-        try {
-          if (typeof app.init === 'function') app.init();
-        } catch (e) {
-          console.warn('[SATApp] init 재호출 중 오류:', e);
-        }
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
 
-      // 0. 스크래핑 이전에 Gemini SAT 설정 시퀀스 실행 (시작 버튼/토글 자동 클릭)
-      try {
-        console.log('[SATApp] Export 전 설정 시퀀스 실행 시도');
-        await runSetupSequence();
-      } catch (setupError) {
-        console.warn('[SATApp] 설정 시퀀스 실행 중 오류 (계속 진행):', setupError);
-      }
-
-      // 0-b. 토글 설정 후 '테스트 시작' 버튼 클릭 → 문제 화면 진입 후 프레임 탐색
-      try {
-        console.log('[SATApp] 테스트 시작 버튼 클릭 시도');
-        showToast('테스트 시작 버튼 클릭 중...', 'info');
-        await configureAndStartTest();
-        showToast('문제 화면 로드 대기 중...', 'info');
-        await new Promise(resolve => setTimeout(resolve, 400));
-      } catch (startError) {
-        console.warn('[SATApp] 테스트 시작 처리 중 오류 (계속 진행):', startError);
-      }
-
-      // 1. Worker 프레임 찾기 (문제 UI가 있는 프레임) - 토글+테스트시작 완료 후 실행
-      console.log('[FRAME] selectWorkerFrame start');
-      // NOTE: showToast is imported from wait.js
-      showToast('문제 화면 프레임 찾는 중...', 'info');
-      console.log('[SATApp] Worker 프레임 찾기 시작');
-      const worker = await findWorkerFrame();
-      console.log('[FRAME] selectWorkerFrame result:', worker ? 'found' : 'not found', {
-        frameCount: window.frames.length,
-        top: window === window.top
-      });
-      
-      let allData = null;
-      
-      if (!worker) {
-        // Worker 프레임을 못 찾았지만, 현재 프레임이 문제 UI일 수도 있음
-        if (looksLikeSatQuestionUI()) {
-          console.log('[SATApp] 현재 프레임이 문제 UI입니다. 이 프레임에서 작업합니다.');
-          window.__SAT_IS_WORKER = true;
-          
-          // 현재 프레임에서 직접 실행
-          // 1. 자동 진입 시퀀스
-          console.log('[SATApp] 자동 진입 시퀀스 시작');
-          console.warn('[NAV_INIT] ★ 호출 위치: content.entry (top, worker 없음·현재가 문제 UI)', window.location.href);
-          showToast('자동 진입 시퀀스 실행 중...', 'info');
-          await this.navigator.handleInitialNavigation();
-          console.log('[SATApp] 자동 진입 시퀀스 완료');
-
-          // 2. 문제 수집
-          showToast('모든 문제를 수집하는 중...', 'info');
-          console.log('[SATApp] 문제 수집 시작 (현재 프레임:', window.location.href, ')');
-          allData = await this.scraper.collectAllProblems();
-        } else {
-          console.warn('[SATApp] Worker 프레임을 찾지 못했습니다. 현재 프레임에서 시도합니다.');
-          showToast('문제 화면 프레임을 찾지 못했습니다. 현재 프레임에서 시도합니다.', 'error');
-          
-          // 현재 프레임에서 시도
-          // 1. 자동 진입 시퀀스
-          console.log('[SATApp] 자동 진입 시퀀스 시작');
-          console.warn('[NAV_INIT] ★ 호출 위치: content.entry (top, fallback)', window.location.href);
-          showToast('자동 진입 시퀀스 실행 중...', 'info');
-          await this.navigator.handleInitialNavigation();
-          console.log('[SATApp] 자동 진입 시퀀스 완료');
-
-          // 2. 문제 수집
-          console.log('[FLOW] start scraper called (current frame fallback)');
-          showToast('모든 문제를 수집하는 중...', 'info');
-          console.log('[SATApp] 문제 수집 시작 (현재 프레임:', window.location.href, ')');
-          allData = await this.scraper.collectAllProblems();
-        }
-      } else {
-        console.log('[SATApp] Worker 프레임 발견:', worker.href);
-        showToast('문제 화면 프레임 발견! 작업 시작...', 'success');
-        
-        // Worker 프레임에 작업 시작 명령 전송
-        console.log('[FRAME] SAT_START sent', { workerHref: worker.href, top: window === window.top });
-        // location.origin 사용: '*' 사용 시 구글 개인정보/계정 선택 iframe이 메시지를 받아 탭이 열림
-        window.postMessage({ type: 'SAT_START', workerHref: worker.href }, location.origin);
-        
-        // Worker 프레임에서 수집 완료 메시지 대기
-        allData = await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            window.removeEventListener('message', onMsg);
-            reject(new Error('Worker 프레임에서 수집 완료 메시지를 받지 못했습니다 (타임아웃 5분)'));
-          }, 5 * 60 * 1000); // 5분 타임아웃
-          
-          function onMsg(ev) {
-            if (ev?.data?.type === 'SAT_COLLECTION_COMPLETE') {
-              clearTimeout(timeout);
-              window.removeEventListener('message', onMsg);
-              console.log('[SATApp] Worker 프레임에서 수집 완료 메시지 수신');
-              resolve(ev.data.data);
-            } else if (ev?.data?.type === 'SAT_COLLECTION_ERROR') {
-              clearTimeout(timeout);
-              window.removeEventListener('message', onMsg);
-              console.error('[SATApp] Worker 프레임에서 수집 오류:', ev.data.error);
-              reject(new Error(ev.data.error));
-            }
+        // 0-a. SAT 화면이 아니면: "I want to take a practice SAT test." 입력 → SAT UI 대기
+        const isSAT = isSATTestPage();
+        if (!isSAT) {
+          showToast('SAT 테스트 요청 메시지 입력 중...', 'info');
+          const automator = new GeminiChatAutomator();
+          await automator.typeMessage(CONFIG.geminiChat.message);
+          console.log('[SATApp] 메시지 전송 완료, SAT UI 대기 중...');
+          showToast('SAT 테스트 화면이 나타날 때까지 대기 중...', 'info');
+          const satUIDetected = await automator.waitForSATUI();
+          if (!satUIDetected) {
+            throw new Error('SAT 테스트 화면이 나타나지 않았습니다. 타임아웃되었습니다.');
           }
-          
-          window.addEventListener('message', onMsg);
+          console.log('[SATApp] SAT UI 진입 완료, 다음 단계 진행');
+          showToast('SAT 테스트 화면 진입 완료!', 'success');
+          try {
+            if (typeof app.init === 'function') app.init();
+          } catch (e) {
+            console.warn('[SATApp] init 재호출 중 오류:', e);
+          }
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+
+        // 0. 설정 시퀀스 + 테스트 시작
+        try {
+          console.log('[SATApp] Export 전 설정 시퀀스 실행 시도');
+          await runSetupSequence();
+        } catch (setupError) {
+          console.warn('[SATApp] 설정 시퀀스 실행 중 오류 (계속 진행):', setupError);
+        }
+        try {
+          console.log('[SATApp] 테스트 시작 버튼 클릭 시도');
+          showToast('테스트 시작 버튼 클릭 중...', 'info');
+          await configureAndStartTest();
+          showToast('문제 화면 로드 대기 중...', 'info');
+          await new Promise(resolve => setTimeout(resolve, 400));
+        } catch (startError) {
+          console.warn('[SATApp] 테스트 시작 처리 중 오류 (계속 진행):', startError);
+        }
+
+        // 1. Worker 프레임 찾기 → 문제 수집
+        showToast('문제 화면 프레임 찾는 중...', 'info');
+        const worker = await findWorkerFrame();
+        let allData = null;
+
+        if (!worker) {
+          if (looksLikeSatQuestionUI()) {
+            window.__SAT_IS_WORKER = true;
+            showToast('자동 진입 시퀀스 실행 중...', 'info');
+            await this.navigator.handleInitialNavigation();
+            showToast('모든 문제를 수집하는 중...', 'info');
+            allData = await this.scraper.collectAllProblems();
+          } else {
+            showToast('문제 화면 프레임을 찾지 못했습니다. 현재 프레임에서 시도합니다.', 'error');
+            showToast('자동 진입 시퀀스 실행 중...', 'info');
+            await this.navigator.handleInitialNavigation();
+            showToast('모든 문제를 수집하는 중...', 'info');
+            allData = await this.scraper.collectAllProblems();
+          }
+        } else {
+          console.log('[SATApp] Worker 프레임 발견:', worker.href);
+          showToast('문제 화면 프레임 발견! 작업 시작...', 'success');
+          window.postMessage({ type: 'SAT_START', workerHref: worker.href }, location.origin);
+          allData = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              window.removeEventListener('message', onMsg);
+              reject(new Error('Worker 프레임에서 수집 완료 메시지를 받지 못했습니다 (타임아웃 5분)'));
+            }, 5 * 60 * 1000);
+            function onMsg(ev) {
+              if (ev?.data?.type === 'SAT_COLLECTION_COMPLETE') {
+                clearTimeout(timeout);
+                window.removeEventListener('message', onMsg);
+                resolve(ev.data.data);
+              } else if (ev?.data?.type === 'SAT_COLLECTION_ERROR') {
+                clearTimeout(timeout);
+                window.removeEventListener('message', onMsg);
+                reject(new Error(ev.data.error));
+              }
+            }
+            window.addEventListener('message', onMsg);
+          });
+        }
+
+        console.log('[SATApp] 문제 수집 완료 (세트 ' + setIndex + '):', {
+          reading: allData.reading.length,
+          math: allData.math.length
         });
-      }
-      console.log('[SATApp] 문제 수집 완료:', {
-        reading: allData.reading.length,
-        math: allData.math.length
-      });
 
-      if ((!allData.reading || allData.reading.length === 0) && 
-          (!allData.math || allData.math.length === 0)) {
-        throw new Error('추출할 SAT 문제를 찾을 수 없습니다.');
-      }
+        if ((!allData.reading || allData.reading.length === 0) && (!allData.math || allData.math.length === 0)) {
+          throw new Error('추출할 SAT 문제를 찾을 수 없습니다.');
+        }
 
-      // 3. PDF 생성 (Reading 문제지/해설지, Math 문제지/해설지 - 총 4개)
-      const totalProblems = allData.reading.length + allData.math.length;
-      if (!allData.timestamp) allData.timestamp = new Date().toISOString();
-      showToast(`${totalProblems}개의 문제를 수집했습니다. PDF ${exportSetCount}세트(4개/세트) 생성 중...`, 'info');
+        const totalProblems = allData.reading.length + allData.math.length;
+        if (!allData.timestamp) allData.timestamp = new Date().toISOString();
+        showToast(`${totalProblems}개 수집. PDF 4개 생성 중 (세트 ${setIndex}/${exportSetCount})...`, 'info');
 
-      const readingCount = (allData.reading || []).length;
-      const mathCount = (allData.math || []).length;
-      const expectedPdfs = (readingCount > 0 ? 2 : 0) + (mathCount > 0 ? 2 : 0);
-      console.log(`[SATApp] PDF 생성 예정: Reading ${readingCount}개 → ${readingCount > 0 ? '문제지+해설지' : '스킵'}, Math ${mathCount}개 → ${mathCount > 0 ? '문제지+해설지' : '스킵'} (총 ${expectedPdfs}개)`);
+        const readingCount = (allData.reading || []).length;
+        const mathCount = (allData.math || []).length;
 
-      for (let i = 1; i <= exportSetCount; i += 1) {
-        showToast(`Reading 문제지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        showToast(`Reading 문제지 PDF 생성 중... (세트 ${setIndex})`, 'info');
         const readingProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, 'reading');
-        showToast(`Reading 해설지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        showToast(`Reading 해설지 PDF 생성 중... (세트 ${setIndex})`, 'info');
         const readingAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, 'reading');
-        showToast(`Math 문제지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        showToast(`Math 문제지 PDF 생성 중... (세트 ${setIndex})`, 'info');
         const mathProblemsDoc = this.pdfGenerator.generateSectionProblemsPDF(allData, 'math');
-        showToast(`Math 해설지 PDF 생성 중... (${i}/${exportSetCount})`, 'info');
+        showToast(`Math 해설지 PDF 생성 중... (세트 ${setIndex})`, 'info');
         const mathAnswersDoc = this.pdfGenerator.generateSectionAnswersPDF(allData, 'math');
 
-        const nullCount = [readingProblemsDoc, readingAnswersDoc, mathProblemsDoc, mathAnswersDoc].filter(d => d == null).length;
-        if (nullCount > 0) {
-          console.warn(`[SATApp] null PDF ${nullCount}개 (읽기:${readingCount}개, 수학:${mathCount}개) - 문제가 없는 섹션은 PDF 미생성`);
-        }
-
-        // 4. PDF 4개 다운로드
         await this.pdfGenerator.downloadFourPDFs(
           readingProblemsDoc,
           readingAnswersDoc,
           mathProblemsDoc,
           mathAnswersDoc,
-          { copyIndex: i, totalCopies: exportSetCount }
+          { copyIndex: setIndex, totalCopies: exportSetCount }
         );
       }
 
-      // 성공 메시지
       showToast(`PDF ${exportSetCount}세트(총 ${exportSetCount * 4}개)가 성공적으로 생성되었습니다!`, 'success');
       button.textContent = '✓ Exported!';
       setTimeout(() => {
