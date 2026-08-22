@@ -1,1 +1,1 @@
-export const BUILD_INFO = {"timestamp":"2026-08-22T16:58:29.675Z","gitSha":"ce6d988"};
+export const BUILD_INFO = {"timestamp":"2026-08-22T21:02:44.892Z","gitSha":"2ee7c56"};

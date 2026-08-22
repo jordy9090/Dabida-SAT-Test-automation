@@ -18,6 +18,7 @@ export function visible(element) {
   if (!element || element.disabled || element.getAttribute?.('aria-disabled') === 'true') return false;
   const rect = element.getBoundingClientRect?.();
   if (rect && (rect.width > 0 || rect.height > 0)) return true;
+  if (rect && typeof window !== 'undefined' && !/jsdom/i.test(window.navigator?.userAgent || '')) return false;
   return typeof getComputedStyle !== 'function' || getComputedStyle(element).display !== 'none';
 }
 

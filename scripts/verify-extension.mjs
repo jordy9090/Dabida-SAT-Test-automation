@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'), out=path.join(root,'extension-build');
-const required=['manifest.json','jspdf.umd.min.js','styles.css','dist/content.js','dist/build-info.json'];
+const required=['manifest.json','jspdf.umd.min.js','styles.css','background.js','dist/content.js','dist/build-info.json'];
 for(const file of required) if(!existsSync(path.join(out,file))) throw new Error(`Missing extension artifact: ${file}`);
 const manifest=JSON.parse(readFileSync(path.join(out,'manifest.json'),'utf8'));
 const refs=[...(manifest.content_scripts||[]).flatMap(x=>[...(x.js||[]),...(x.css||[])]),manifest.background?.service_worker].filter(Boolean);

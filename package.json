@@ -8,6 +8,7 @@
     "build": "node scripts/build-extension.mjs --bundle-only",
     "build:extension": "node scripts/build-extension.mjs",
     "verify:extension": "node scripts/verify-extension.mjs",
+    "login:gemini": "node scripts/login-gemini.mjs",
     "smoke:gemini": "npm run build:extension && node scripts/live-gemini.mjs smoke",
     "e2e:gemini": "npm run build:extension && node scripts/live-gemini.mjs full",
     "playwright:login": "npx ts-node playwright/scripts/login.ts",
@@ -32,6 +33,7 @@
     "esbuild": "^0.27.2",
     "jsdom": "^29.1.1",
     "playwright": "^1.40.0",
+    "puppeteer-core": "^25.8.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.0"
   },

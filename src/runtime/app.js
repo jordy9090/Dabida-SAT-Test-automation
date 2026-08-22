@@ -9,10 +9,13 @@ function setStatus(button, text, error = false) { button.textContent = text; but
 
 async function configureSetup() {
   const root = satDocument();
-  const labels = deepAll(root, 'label, [role="switch"], button');
-  const reveal = labels.find(el => /show.*(answer|explanation)|정답.*(표시|보기)|해설.*표시/i.test(el.innerText || el.getAttribute('aria-label') || ''));
+  const labels = deepAll(root, 'label, [role="switch"], button, div, span');
+  const reveal = labels
+    .filter(el => /show.*(answer|explanation)|immediate feedback|정답.*(표시|보기)|해설.*표시|즉각적인 피드백/i.test(el.innerText || el.getAttribute('aria-label') || ''))
+    .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
   if (reveal) {
-    const toggle = reveal.matches('[role="switch"], input') ? reveal : reveal.querySelector('[role="switch"], input[type="checkbox"]');
+    const setting = reveal.closest('label, [class*="toggle"], [class*="setting"], [class*="option"]') || reveal.parentElement;
+    const toggle = reveal.matches('[role="switch"], input') ? reveal : setting?.querySelector('[role="switch"], input[type="checkbox"]');
     const checked = toggle?.checked ?? toggle?.getAttribute('aria-checked') === 'true';
     if (toggle && !checked) toggle.click();
     await waitFor(() => (toggle.checked ?? toggle.getAttribute('aria-checked') === 'true'), { timeout: 10000, description: 'answer/explanation toggle enabled', root });
@@ -42,7 +45,10 @@ export function boot() {
         });
         const problems = await runner.run();
         button.dataset.runSummary = JSON.stringify(problems.map(problem => ({ id: `${problem.section}:${problem.module}:${problem.problemNumber}`, complete: !!(problem.question && problem.correctAnswer && problem.explanation), hasPlaceholder: /\[QUESTION_NOT_EXTRACTED\]/.test(problem.question) })));
-        if (smoke) { setStatus(button, 'Smoke PASS'); return; }
+        if (smoke) {
+          if (problems.length !== 1) throw new Error(`Smoke expected one validated problem, collected ${problems.length}`);
+          setStatus(button, 'Smoke PASS'); return;
+        }
         setStatus(button, 'Building PDFs'); await downloadFour(buildPdfDocuments(problems)); setStatus(button, 'Done');
       } catch (error) { console.error('[Gemini SAT Exporter]', error); setStatus(button, `Error: ${error.message}`, true); }
       finally { button.dataset.running = 'false'; button.disabled = false; }

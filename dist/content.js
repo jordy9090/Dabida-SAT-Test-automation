@@ -1,4 +1,4 @@
-// Gemini SAT PDF Exporter ce6d988 2026-08-22T16:58:29.675Z
+// Gemini SAT PDF Exporter 2ee7c56 2026-08-22T21:02:44.892Z
 (() => {
   var __create = Object.create;
   var __defProp = Object.defineProperty;
@@ -7815,7 +7815,7 @@
   var import_html2canvas = __toESM(require_html2canvas());
 
   // src/generated/buildInfo.js
-  var BUILD_INFO = { "timestamp": "2026-08-22T16:58:29.675Z", "gitSha": "ce6d988" };
+  var BUILD_INFO = { "timestamp": "2026-08-22T21:02:44.892Z", "gitSha": "2ee7c56" };
 
   // src/runtime/dom.js
   var norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
@@ -7842,6 +7842,7 @@
     if (!element || element.disabled || element.getAttribute?.("aria-disabled") === "true") return false;
     const rect = element.getBoundingClientRect?.();
     if (rect && (rect.width > 0 || rect.height > 0)) return true;
+    if (rect && typeof window !== "undefined" && !/jsdom/i.test(window.navigator?.userAgent || "")) return false;
     return typeof getComputedStyle !== "function" || getComputedStyle(element).display !== "none";
   }
   var textOf = (element) => norm(element?.innerText || element?.textContent);
@@ -7898,40 +7899,70 @@
 
   // src/runtime/extractor.js
   var labelFor = (el, i) => norm(el.getAttribute?.("data-label") || el.getAttribute?.("aria-label")).match(/\b([A-D])\b/i)?.[1]?.toUpperCase() || String.fromCharCode(65 + i);
+  var CHOICE_SELECTOR = '[data-test-id*="choice"], [data-testid*="choice"], [role="radio"], input[type="radio"], button.option, [class*="answer-choice"], [class*="choice-option"]';
   function progress(root) {
-    const match = norm(root.body?.innerText || root.innerText).match(/(?:question|problem|문제)?\s*(\d+)\s*(?:of|\/|중)\s*(\d+)/i);
+    const surface = root.querySelector?.('[role="main"], main') || root.body || root;
+    const text = norm(surface.innerText || surface.textContent);
+    const match = text.match(/(?:question|problem|문제|질문)\s*(\d+)\s*(?:of|\/|중)\s*(\d+)/i) || text.match(/\b(\d+)\s*\/\s*(22|27)\b/);
     return match ? { current: Number(match[1]), total: Number(match[2]) } : null;
   }
   function sectionState(root) {
-    const text = norm(root.body?.innerText || root.innerText), p = progress(root);
-    const section = /\bmath\b|수학/i.test(text) ? "math" : "reading";
+    const surface = root.querySelector?.('[role="main"], main') || root.body || root;
+    const text = norm(surface.innerText || surface.textContent), p = progress(root);
+    const satContext = /\bSAT\b|reading and writing|digital sat|practice test|읽기.*쓰기|수학.*모듈/i.test(text);
+    const hasTransitionControl = deepAll(surface, 'button, [role="button"]').some((el) => visible(el) && /^(start|continue|시작|계속)$|start.*(module|test|practice)|모듈.*시작|테스트.*시작|시험.*시작/i.test(textOf(el))) || /\bstart\s+module\b|모듈\s*시작/i.test(text);
+    const hasCompletionUI = deepAll(surface, '[data-test-id*="result"], [data-testid*="result"], [class*="result"], h1, h2, h3').some((el) => visible(el) && /^(results?|test complete|completed|결과|테스트 완료)$/i.test(textOf(el))) || /(?:great work|congratulations|수고하셨습니다)[!！]?\s*(?:check|점수)|(?:test|시험|테스트)\s*(?:is\s*)?(?:complete|완료)/i.test(text);
+    const hasReading = /reading and writing|읽기.*쓰기/i.test(text), hasMath = /\bmath\b|수학/i.test(text);
+    const section = /next steps?|다음 단계/i.test(text) && hasMath ? "math" : hasMath && !hasReading ? "math" : "reading";
     const module = Number(text.match(/(?:module|모듈)\s*([12])/i)?.[1] || 1);
-    if (/(results?|complete|finished|완료|결과)/i.test(text) && !p) return { phase: "COMPLETE", section, module };
-    if (/\b(start|begin|continue)\b|시작|계속/i.test(text) && !p) return { phase: "TRANSITION", section, module };
+    if (hasCompletionUI && !p && !/next steps?|다음 단계/i.test(text)) return { phase: "COMPLETE", section, module };
+    if (satContext && hasTransitionControl && !p) return { phase: "TRANSITION", section, module };
     return { phase: p ? "QUESTION" : "UNKNOWN", section, module };
   }
   var questionRoot = (root) => deepAll(root, '[data-test-id*="question"], [data-testid*="question"], [role="main"], main').find(visible) || root.body || root;
   function extractPrompt(root, context = {}) {
     const scope = questionRoot(root);
-    const controls = deepAll(scope, '[data-test-id*="choice"], [data-testid*="choice"], [role="radio"], input[type="radio"]').filter(visible);
-    const choices = controls.map((el, i) => ({ label: labelFor(el, i), text: textOf(el.closest?.("label") || el) })).filter((c) => c.text);
-    const input = deepAll(scope, 'input:not([type]), input[type="text"], input[type="number"], [role="textbox"]').find((el) => visible(el) && !el.closest?.('[contenteditable="true"]'));
+    const controls = deepAll(scope, CHOICE_SELECTOR).filter(visible);
+    let choices = controls.map((el, i) => ({ label: labelFor(el, i), text: textOf(el.closest?.("label") || el) })).filter((c) => c.text);
+    const lines = String(scope.innerText || "").split(/\n+/).map(norm).filter(Boolean);
+    if (!choices.length) {
+      choices = lines.flatMap((line, index) => /^[A-D][.)]?$/.test(line) && lines[index + 1] ? [{ label: line[0], text: lines[index + 1] }] : []);
+    }
+    const input = deepAll(scope, 'textarea, input:not([type]), input[type="text"], input[type="number"], [role="textbox"]').find((el) => visible(el) && !el.isContentEditable && !/Gemini.*(prompt|프롬프트)/i.test(el.getAttribute?.("aria-label") || ""));
+    const readOnlyGridIn = !choices.length && !!scope.querySelector?.(".question-container.read-only .explanation .option-text-container, .question-container.read-only .explanation-text");
     const stem = deepAll(scope, '[data-test-id*="prompt"], [data-testid*="prompt"], [class*="question"], h1, h2, h3, p').filter(visible).map(textOf).filter((text) => text.length > 8 && !choices.some((c) => c.text === text));
+    const textQuestion = [...lines].reverse().find((line) => /[?？]$/.test(line) && line.length > 8);
     const state = sectionState(root), p = progress(root);
-    return { section: context.section || state.section, module: context.module || state.module, problemNumber: context.problemNumber || p?.current, passage: norm(deepAll(scope, '[data-test-id*="passage"], [data-testid*="passage"], [class*="passage"]').filter(visible).map(textOf).join("\n")), question: norm(stem.sort((a, b) => b.length - a.length)[0]), choices, responseType: choices.length ? "multiple_choice" : input ? "grid_in" : null, submittedAnswer: "", correctAnswer: "", explanation: "", figures: [], extractionWarnings: [] };
+    return { section: context.section || state.section, module: context.module || state.module, problemNumber: context.problemNumber || p?.current, passage: norm(deepAll(scope, '[data-test-id*="passage"], [data-testid*="passage"], [class*="passage"]').filter(visible).map(textOf).join("\n")), question: norm(textQuestion || stem.sort((a, b) => b.length - a.length)[0]), choices, responseType: choices.length ? "multiple_choice" : input || readOnlyGridIn ? "grid_in" : null, submittedAnswer: "", correctAnswer: "", explanation: "", figures: [], extractionWarnings: [] };
   }
   function answerControl(root, problem) {
     const scope = questionRoot(root);
-    return problem.responseType === "multiple_choice" ? deepAll(scope, '[data-test-id*="choice"], [data-testid*="choice"], [role="radio"], input[type="radio"]').find(visible) : deepAll(scope, 'input:not([type]), input[type="text"], input[type="number"], [role="textbox"]').find(visible);
+    if (problem.responseType === "multiple_choice") {
+      const exact = deepAll(scope, CHOICE_SELECTOR).find(visible);
+      if (exact) return exact.closest?.('button, [role="button"], label') || exact;
+      const first = problem.choices[0];
+      return deepAll(scope, 'button, [role="button"], [class*="choice"], [class*="answer"], [class*="option"]').find((el) => visible(el) && (textOf(el).includes(first.text) || new RegExp(`^${first.label}[.)]?\\s`).test(textOf(el))));
+    }
+    return deepAll(scope, 'textarea, input:not([type]), input[type="text"], input[type="number"], [role="textbox"]').find((el) => visible(el) && !el.isContentEditable && !/Gemini.*(prompt|프롬프트)/i.test(el.getAttribute?.("aria-label") || ""));
   }
   function gradedData(root) {
-    const correct = deepAll(root, '[data-correct="true"], [aria-label*="correct" i], [data-test-id*="correct"], [data-testid*="correct"], .correct').filter(visible).map(textOf).find(Boolean) || "";
-    const explanationNode = deepAll(root, '[data-test-id*="explanation"], [data-testid*="explanation"], [class*="explanation"], [aria-label*="explanation" i]').filter(visible).find((el) => textOf(el).length > 5);
+    const shortAnswer = deepAll(root, ".short-answer-container").find(visible);
+    const readOnlyAnswer = deepAll(root, ".question-container.read-only .explanation").find(visible);
+    const shortCorrect = textOf((shortAnswer || readOnlyAnswer)?.querySelector?.(".option-text-container"));
+    const shortExplanation = textOf((shortAnswer || readOnlyAnswer)?.querySelector?.(".explanation-text"));
+    const revealedCorrect = deepAll(root, 'button.revealed-correct, [class~="revealed-correct"]').find(visible);
+    const revealedLabel = norm(revealedCorrect?.querySelector?.(".option-prefix")?.textContent).match(/^([A-D])/i)?.[1]?.toUpperCase();
+    const correct = shortCorrect || revealedLabel || deepAll(root, '[data-correct="true"], [aria-label*="correct" i], [data-test-id*="correct"], [data-testid*="correct"], .correct').filter(visible).map(textOf).find((text) => text && !/^(correct|정답)$/i.test(text)) || "";
+    const scopedExplanation = revealedCorrect?.querySelector?.('.lm-explanation-text, [class*="explanation-text"], [data-test-id*="explanation"], [data-testid*="explanation"]');
+    const explanationNode = scopedExplanation || deepAll(root, '[data-test-id*="explanation"], [data-testid*="explanation"], [class*="explanation-text"], [aria-label*="explanation" i]').filter(visible).find((el) => textOf(el).length > 5);
     const body = norm(root.body?.innerText);
-    return { correctAnswer: norm(correct || body.match(/(?:correct answer|정답)\s*[:\-]?\s*([^\n.]{1,100})/i)?.[1]), explanation: norm(textOf(explanationNode) || body.match(/(?:explanation|해설)\s*[:\-]?\s*([\s\S]{10,2000})/i)?.[1]) };
+    return { correctAnswer: norm(correct || body.match(/(?:correct answer|정답)\s*[:\-]?\s*([^\n.]{1,100})/i)?.[1]), explanation: norm(shortExplanation || textOf(explanationNode) || body.match(/(?:explanation|해설)\s*[:\-]?\s*([\s\S]{10,2000})/i)?.[1]) };
   }
   function navigationButton(root, kind) {
-    const patterns = { submit: [/submit/i, /check answer/i, /제출|정답 확인/], next: [/^next$/i, /next question/i, /^다음$/], transition: [/start.*module|begin.*module|continue|start math/i, /모듈.*시작|계속|수학.*시작/], confirm: [/confirm|submit|yes/i, /확인|제출|예/] };
+    if (kind === "confirm") {
+      return findByText(root, 'button, [role="button"]', [/^yes.*submit$/i, /^예.*제출$/, /^confirm$/i, /^확인$/]);
+    }
+    const patterns = { submit: [/submit/i, /check answer/i, /제출|정답 확인/], next: [/^next$/i, /next question/i, /^다음$/], back: [/^back$/i, /previous question/i, /^뒤로$/], transition: [/^start$|start.*module|begin.*module|continue|start math|start.*test|start.*practice/i, /^시작$|모듈.*시작|계속|수학.*시작|테스트.*시작|시험.*시작/] };
     return findByText(root, 'button, [role="button"]', patterns[kind]);
   }
   function validateProblem(problem) {
@@ -7962,7 +7993,12 @@
   async function captureFigures(root) {
     const scope = deepAll(root, '[data-test-id*="question"], [data-testid*="question"], [role="main"], main').find(visible) || root.body;
     const figures = [];
-    for (const element of deepAll(scope, "img, svg, canvas").filter(visible)) {
+    const candidates = deepAll(scope, "img, svg, canvas").filter((element) => {
+      if (!visible(element) || element.closest?.('button, [role="button"], nav')) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width >= 80 && rect.height >= 50;
+    });
+    for (const element of candidates) {
       try {
         const canvas = await window.html2canvas(element, { backgroundColor: "#fff", scale: 1 });
         figures.push({ dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height });
@@ -7982,35 +8018,56 @@
       throw new Error(`${message} (${context.section} M${context.module} #${context.problemNumber || "?"})`);
     }
     async runQuestion(root) {
-      const context = { ...sectionState(root), problemNumber: progress(root)?.current };
+      let context = { ...sectionState(root), problemNumber: progress(root)?.current };
       this.status(context.section === "math" ? `Math M${context.module}` : `Reading M${context.module}`);
       await waitFor(() => sectionState(root).phase === "QUESTION", { description: "WAIT_QUESTION", root });
-      let problem;
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        problem = extractPrompt(root, context);
-        if (problem.question && problem.responseType) break;
-        if (attempt === 3) this.fail("EXTRACT_PROMPT failed", context);
-        await waitFor(() => extractPrompt(root, context).question, { timeout: 5e3, description: "question text", root });
-      }
+      let problem = await waitFor(async () => {
+        const firstContext = { ...sectionState(root), problemNumber: progress(root)?.current };
+        const first = extractPrompt(root, firstContext);
+        if (!first.question || !first.responseType) return false;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const secondContext = { ...sectionState(root), problemNumber: progress(root)?.current };
+        const second = extractPrompt(root, secondContext);
+        return second.question && second.responseType && first.section === second.section && first.module === second.module && first.problemNumber === second.problemNumber && first.question === second.question ? second : false;
+      }, { timeout: 15e3, description: "stable question text and answer control", root }).catch(() => null);
+      context = { ...sectionState(root), problemNumber: progress(root)?.current };
+      if (!problem) this.fail("EXTRACT_PROMPT failed", context);
       problem.figures = await captureFigures(root);
-      const control = answerControl(root, problem);
-      if (!control) this.fail("ANSWER control missing", context);
-      if (problem.responseType === "multiple_choice") {
-        problem.submittedAnswer = problem.choices[0].label;
-        control.click();
+      const alreadyGraded = gradedData(root);
+      if (alreadyGraded.correctAnswer && alreadyGraded.explanation) {
+        Object.assign(problem, alreadyGraded);
+        problem.submittedAnswer = "(skipped/read-only)";
       } else {
-        problem.submittedAnswer = "0";
-        control.focus();
-        setNativeValue(control, "0");
+        const control = answerControl(root, problem);
+        if (!control) this.fail("ANSWER control missing", context);
+        const before = gradedData(root);
+        if (problem.responseType === "multiple_choice") {
+          problem.submittedAnswer = problem.choices[0].label;
+          control.click();
+        } else {
+          problem.submittedAnswer = "0";
+          control.focus();
+          setNativeValue(control, "0");
+        }
+        if (problem.responseType === "grid_in") {
+          const submit = navigationButton(root, "submit");
+          if (submit) submit.click();
+        }
+        let graded = null;
+        for (let attempt = 1; attempt <= 3 && !graded; attempt += 1) {
+          graded = await waitFor(() => {
+            const g = gradedData(root);
+            return g.correctAnswer && g.explanation && (g.correctAnswer !== before.correctAnswer || g.explanation !== before.explanation) && g;
+          }, { timeout: 1e4, description: "WAIT_GRADED correct answer and explanation", root }).catch(() => null);
+          if (!graded && attempt < 3) {
+            const retryControl = answerControl(root, problem);
+            if (retryControl) retryControl.click();
+            if (problem.responseType === "grid_in") navigationButton(root, "submit")?.click();
+          }
+        }
+        if (!graded) this.fail("WAIT_GRADED failed after 3 attempts", context);
+        Object.assign(problem, gradedData(root));
       }
-      const before = gradedData(root);
-      const submit = navigationButton(root, "submit");
-      if (submit) submit.click();
-      await waitFor(() => {
-        const g = gradedData(root);
-        return g.correctAnswer && g.explanation && (g.correctAnswer !== before.correctAnswer || g.explanation !== before.explanation) && g;
-      }, { timeout: 3e4, description: "WAIT_GRADED correct answer and explanation", root });
-      Object.assign(problem, gradedData(root));
       if (!problem.correctAnswer) this.fail("EXTRACT_CORRECT_ANSWER failed", context);
       if (!problem.explanation) this.fail("EXTRACT_EXPLANATION failed", context);
       dedupeAndValidate([problem]);
@@ -8019,19 +8076,31 @@
         this.seen.add(key);
         this.problems.push(problem);
         this.options.onCollect?.(problem, this.problems);
+        console.info(`[Gemini SAT Exporter] saved ${problem.section} M${problem.module} #${problem.problemNumber}; total=${this.problems.length}`);
       }
       return problem;
     }
     async transition(root) {
       const before = sectionState(root), button = navigationButton(root, "transition") || navigationButton(root, "submit");
+      const beforeProgress = progress(root);
       if (!button) throw new Error(`Transition control missing after ${before.section} M${before.module}`);
+      const beforeText = norm(root.body?.innerText);
       button.click();
-      const confirm = await waitFor(() => navigationButton(root, "confirm") || sectionState(root).phase !== before.phase, { timeout: 1e4, description: "module confirmation or transition", root });
-      if (confirm?.click) confirm.click();
-      await waitFor(() => {
-        const now = sectionState(root);
-        return now.phase === "QUESTION" || now.phase === "COMPLETE";
-      }, { timeout: 3e4, description: "next module/section question", root });
+      const expectsConfirmation = beforeProgress && beforeProgress.current === beforeProgress.total;
+      const changed = await waitFor(
+        () => navigationButton(root, "confirm") || !expectsConfirmation && norm(root.body?.innerText) !== beforeText,
+        { timeout: 2e4, description: "module confirmation or transition", root }
+      );
+      if (changed?.click) {
+        const confirmText = norm(root.body?.innerText);
+        changed.click();
+        await waitFor(() => {
+          const now = progress(root);
+          const currentState = sectionState(root);
+          const moduleChanged = currentState.section !== before.section || currentState.module !== before.module;
+          return norm(root.body?.innerText) !== confirmText && (!beforeProgress || !now || now.current !== beforeProgress.current && moduleChanged);
+        }, { timeout: 3e4, description: "confirmation state transition", root });
+      }
     }
     async run() {
       let guard = 0;
@@ -8047,11 +8116,30 @@
           continue;
         }
         const before = progress(root);
+        const beforeState = sectionState(root);
+        const collectedHere = this.problems.filter((problem) => problem.section === state.section && problem.module === state.module).map((problem) => Number(problem.problemNumber));
+        const expectedNumber = collectedHere.length ? Math.max(...collectedHere) + 1 : 1;
+        if (before?.current > expectedNumber) {
+          const back = navigationButton(root, "back");
+          if (!back) throw new Error(`Missing ${state.section} M${state.module} #${expectedNumber}; cannot navigate back from #${before.current}`);
+          await clickAndWait(back, () => progress(root)?.current < before.current, "BACK TO MISSING QUESTION", root);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
         await this.runQuestion(root);
         if (this.options.maxProblems && this.problems.length >= this.options.maxProblems) return dedupeAndValidate(this.problems);
         const next = navigationButton(root, "next");
-        if (next) await clickAndWait(next, () => progress(root)?.current !== before?.current || sectionState(root).phase !== "QUESTION", "NEXT", root);
-        else await this.transition(root);
+        if (next) {
+          await clickAndWait(next, () => progress(root)?.current !== before?.current || sectionState(root).phase !== "QUESTION", "NEXT", root);
+          const afterNext = progress(root);
+          if (before && afterNext && afterNext.current < before.current) {
+            await waitFor(() => {
+              const state2 = sectionState(root);
+              return state2.section !== beforeState.section || state2.module !== beforeState.module;
+            }, { timeout: 15e3, description: "module identity after question reset", root });
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        } else await this.transition(root);
       }
       if (guard >= 250) throw new Error("Safety limit reached before SAT completion");
       return dedupeAndValidate(this.problems);
@@ -8068,10 +8156,26 @@
       input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: message }));
     } else setNativeValue(input, message);
     if (!norm(input.innerText || input.value).includes(message)) throw new Error("Gemini prompt verification failed");
-    const send = deepAll(document, 'button, [role="button"]').find((el) => visible(el) && /send|submit|보내기/i.test(norm(el.getAttribute("aria-label") || el.innerText)));
-    if (!send) throw new Error("Gemini Send button not found");
-    send.click();
-    await waitFor(() => sectionState(satDocument()).phase !== "UNKNOWN", { timeout: 12e4, description: "interactive SAT UI" });
+    const findSend = () => deepAll(document, 'button, [role="button"]').find((el) => visible(el) && /send|submit|보내기/i.test(norm(el.getAttribute("aria-label") || el.innerText)));
+    const send = await waitFor(findSend, { timeout: 1e4, description: "enabled Gemini Send button" }).catch(() => null);
+    if (send) send.click();
+    else {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    }
+    let openedCard = false;
+    await waitFor(() => {
+      const phase = sectionState(satDocument()).phase;
+      if (phase !== "UNKNOWN") return true;
+      if (!openedCard) {
+        const open = findByText(document, 'button, a, [role="button"]', [/^open$/i, /^열기$/]);
+        if (open) {
+          openedCard = true;
+          open.click();
+        }
+      }
+      return false;
+    }, { timeout: 6e5, description: "complete interactive SAT UI" });
   }
 
   // src/runtime/pdf.js
@@ -8154,10 +8258,11 @@
   }
   async function configureSetup() {
     const root = satDocument();
-    const labels = deepAll(root, 'label, [role="switch"], button');
-    const reveal = labels.find((el) => /show.*(answer|explanation)|정답.*(표시|보기)|해설.*표시/i.test(el.innerText || el.getAttribute("aria-label") || ""));
+    const labels = deepAll(root, 'label, [role="switch"], button, div, span');
+    const reveal = labels.filter((el) => /show.*(answer|explanation)|immediate feedback|정답.*(표시|보기)|해설.*표시|즉각적인 피드백/i.test(el.innerText || el.getAttribute("aria-label") || "")).sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
     if (reveal) {
-      const toggle = reveal.matches('[role="switch"], input') ? reveal : reveal.querySelector('[role="switch"], input[type="checkbox"]');
+      const setting = reveal.closest('label, [class*="toggle"], [class*="setting"], [class*="option"]') || reveal.parentElement;
+      const toggle = reveal.matches('[role="switch"], input') ? reveal : setting?.querySelector('[role="switch"], input[type="checkbox"]');
       const checked = toggle?.checked ?? toggle?.getAttribute("aria-checked") === "true";
       if (toggle && !checked) toggle.click();
       await waitFor(() => toggle.checked ?? toggle.getAttribute("aria-checked") === "true", { timeout: 1e4, description: "answer/explanation toggle enabled", root });
@@ -8191,6 +8296,7 @@
           const problems = await runner.run();
           button.dataset.runSummary = JSON.stringify(problems.map((problem) => ({ id: `${problem.section}:${problem.module}:${problem.problemNumber}`, complete: !!(problem.question && problem.correctAnswer && problem.explanation), hasPlaceholder: /\[QUESTION_NOT_EXTRACTED\]/.test(problem.question) })));
           if (smoke) {
+            if (problems.length !== 1) throw new Error(`Smoke expected one validated problem, collected ${problems.length}`);
             setStatus(button, "Smoke PASS");
             return;
           }

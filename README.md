@@ -14,9 +14,9 @@ In `chrome://extensions`, enable Developer mode and load **only `extension-build
 
 ## Use
 
-1. Sign in and open `https://gemini.google.com/`.
-2. Click **Export to PDF** once.
-3. Keep the tab open until the button reads **Done**.
+For the first authentication only, run `npm run login:gemini`, sign in in the normal stable Chrome window, confirm Gemini chat loads, and close Chrome. This command uses `.chrome-profile/` without Playwright, extension flags, or sandbox bypasses. Never enter credentials into automation.
+
+Then use `npm run smoke:gemini` for a one-question production check or `npm run e2e:gemini` for the full SAT. Both reuse the authenticated profile.
 
 The extension sends `I want to take a full practice SAT TEST.`, enables the answer/explanation setup option when present, traverses Reading/Writing modules 1–2 and Math modules 1–2, and downloads:
 
