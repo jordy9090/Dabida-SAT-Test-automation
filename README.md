@@ -2,6 +2,10 @@
 
 A Chrome Extension that starts Gemini's interactive SAT, captures Reading/Writing and Math questions (including grid-ins), and downloads four PDFs.
 
+## Verified end-to-end
+
+Validated against a live, authenticated Gemini SAT: 54 Reading & Writing questions (27 per module) and 44 Math questions (22 per module), for 98 total. The run produced no duplicate IDs or missing question, correct-answer, or explanation fields. Both multiple-choice and grid-in flows passed, and all four PDFs were generated successfully.
+
 ## Build and load
 
 ```bash
