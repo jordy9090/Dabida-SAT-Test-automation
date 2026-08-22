@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "Chrome Extension to extract SAT problems from Google Gemini and export to PDF",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test test/*.test.js",
     "prebuild": "node -e \"require('fs').mkdirSync('dist',{recursive:true}); require('fs').writeFileSync('dist/build-info.txt', 'cwd: '+process.cwd()+'\\nbuilt: '+new Date().toISOString()); console.log('Building in:', process.cwd());\"",
-    "build": "esbuild content.js --bundle --format=iife --platform=browser --target=chrome120 --outfile=dist/content.js --sourcemap --banner:js=\"// Gemini SAT PDF Exporter - Bundled Content Script\"",
+    "build": "node scripts/build-extension.mjs --bundle-only",
+    "build:extension": "node scripts/build-extension.mjs",
+    "verify:extension": "node scripts/verify-extension.mjs",
+    "smoke:gemini": "npm run build:extension && node scripts/live-gemini.mjs smoke",
+    "e2e:gemini": "npm run build:extension && node scripts/live-gemini.mjs full",
     "playwright:login": "npx ts-node playwright/scripts/login.ts",
     "playwright:smoke": "npx ts-node playwright/scripts/smoke.ts",
     "playwright:frame-probe": "npx ts-node playwright/scripts/frame_probe.ts",
@@ -14,12 +18,19 @@
     "playwright:collect": "npx ts-node playwright/runner.ts",
     "playwright:build-extractor": "esbuild src/browser/extractor.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/extractor.bundle.js"
   },
-  "keywords": ["chrome-extension", "sat", "pdf", "gemini", "scraping"],
+  "keywords": [
+    "chrome-extension",
+    "sat",
+    "pdf",
+    "gemini",
+    "scraping"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.10.0",
     "esbuild": "^0.27.2",
+    "jsdom": "^29.1.1",
     "playwright": "^1.40.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.0"

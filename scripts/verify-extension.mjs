@@ -1,0 +1,14 @@
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'), out=path.join(root,'extension-build');
+const required=['manifest.json','jspdf.umd.min.js','styles.css','dist/content.js','dist/build-info.json'];
+for(const file of required) if(!existsSync(path.join(out,file))) throw new Error(`Missing extension artifact: ${file}`);
+const manifest=JSON.parse(readFileSync(path.join(out,'manifest.json'),'utf8'));
+const refs=[...(manifest.content_scripts||[]).flatMap(x=>[...(x.js||[]),...(x.css||[])]),manifest.background?.service_worker].filter(Boolean);
+for(const ref of refs) if(!existsSync(path.join(out,ref))) throw new Error(`Manifest references missing file: ${ref}`);
+const bundle=readFileSync(path.join(out,'dist/content.js'),'utf8');
+if(/^\s*(?:import|export)\s/m.test(bundle)) throw new Error('Generated content bundle contains unresolved module syntax');
+if(/127\.0\.0\.1|localhost/.test(bundle)) throw new Error('Generated bundle contains localhost telemetry');
+if(!/Gemini SAT Exporter/.test(bundle)) throw new Error('Generated bundle lacks build identity');
+console.log(`Verified extension-build (${refs.length} manifest references)`);

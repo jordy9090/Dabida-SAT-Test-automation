@@ -30,3 +30,7 @@ yarn-error.log*
 .env
 .env.local
 
+# Headed Gemini verification (contains persistent authentication state)
+.chrome-profile/
+test-results/live-gemini/
+
